@@ -1,0 +1,14 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+## MCP
+> This configuration is for when you have access to MCP servers. 
+You can use sequential-thinking and memory to break up complex tasks into parts. Consider sequential-thinking to be RAM, and memory to be disk storage.  
+Check memory at the beginning of tasks to see what our overarching plans may be.
+
+## VERSION MANAGEMENT
+for node, we use `nvm`. There should be an `.nvmrc` file within the project root directory. 
+for python, we use `pyenv` along with `pyenv virtualenv` -- the pyenv for this project is called 'ndaexpress311' 
+

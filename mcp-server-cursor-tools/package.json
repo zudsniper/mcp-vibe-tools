@@ -1,0 +1,25 @@
+{
+  "name": "mcp-server-cursor-tools",
+  "version": "1.0.0",
+  "description": "MCP Server wrapper for the cursor-tools CLI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "jest"
+  },
+  "keywords": [
+    "mcp",
+    "cursor-tools",
+    "cli",
+    "wrapper"
+  ],
+  "author": "AI Assistant",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.17.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.1.0"
+  }
+} 
