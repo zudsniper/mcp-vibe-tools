@@ -3,20 +3,31 @@ import subprocess
 import os
 import pathlib
 import sys
-import tomli
 import time
 from typing import Optional, List, Dict, Any, Literal, Union
 
 # Read version from pyproject.toml
-with open(pathlib.Path(__file__).parent / "pyproject.toml", "rb") as f:
-    pyproject = tomli.load(f)
-    VERSION = pyproject["project"]["version"]
+VERSION = "0.0.0"  # Default version
+try:
+    with open(pathlib.Path(__file__).parent / "pyproject.toml", "r") as f:
+        for line in f:
+            if line.strip().startswith("version ="):
+                VERSION = line.split("=")[1].strip().strip('"')
+                break
+except FileNotFoundError:
+    print("DEBUG: pyproject.toml not found, using default version.", file=sys.stderr)
+except Exception as e:
+    print(f"DEBUG: Error reading version from pyproject.toml: {e}", file=sys.stderr)
 
 # Get cursor-tools path from environment or use default
 cursor_tools_exec = os.environ.get('CURSOR_TOOLS_PATH', 'cursor-tools')
 
 # Initialize FastMCP
-mcp = FastMCP("cursor-tools-mcp", version=VERSION)
+mcp = FastMCP(
+    "cursor-tools-mcp", 
+    version=VERSION,
+    description="MCP server for cursor-tools CLI. IMPORTANT: Always set working directory with set_working_directory before using any tools."
+)
 
 # Global working directory
 current_working_directory = "/Users/jason/mcp/mcp-vibe-tools"
@@ -199,7 +210,11 @@ def run_cursor_tools(
 
 @mcp.tool()
 def set_working_directory(directory_path: str) -> str:
-    """Set the working directory for cursor-tools commands."""
+    """Set the working directory for cursor-tools commands.
+    
+    IMPORTANT: This function must be called at least once before using any other tools.
+    Sets the base directory where cursor-tools will execute commands and resolve relative paths.
+    """
     global current_working_directory
     
     # Resolve the input path relative to the current working directory
@@ -223,25 +238,31 @@ def test(message: str, ctx: Context = None) -> str:
 @mcp.tool()
 def ask(
     query: str,
-    max_tokens: Optional[int] = None,
-    provider: Optional[Literal["openai", "anthropic", "ollama", "llama2", "llama3", "mixtral", "phi3", "claude", "gpt4", "gpt35", "mistral", "perplexity", "gemini", "modelbox", "openrouter"]] = None,
-    model: Optional[str] = None,
-    reasoning_effort: Optional[Literal["low", "medium", "high"]] = None,
-    save_to: Optional[str] = None,
-    ctx: Context = None
+    ctx: Context = None,
+    **kwargs
 ) -> str:
     """Ask a direct question to an LLM without context.
     
     Note: Generally less useful than repo or plan as it doesn't include codebase context.
+    
+    Parameters:
+        query: Question to ask the LLM
+        max_tokens: Optional[int] - Maximum tokens for response
+        provider: Optional[str] - AI provider (openai, anthropic, etc.)
+        model: Optional[str] - Model name to use
+        reasoning_effort: Optional[str] - Control reasoning depth (low/medium/high)
+        save_to: Optional[str] - Path to save response
     """
     command = [cursor_tools_exec, "ask", query]
-    params = {
-        "max_tokens": max_tokens,
-        "provider": provider,
-        "model": model,
-        "reasoning_effort": reasoning_effort,
-        "save_to": save_to
-    }
+    
+    # Extract known parameters from kwargs
+    params = {}
+    valid_params = ["max_tokens", "provider", "model", "reasoning_effort", "save_to"]
+    
+    for param in valid_params:
+        if param in kwargs and kwargs[param] is not None:
+            params[param] = kwargs[param]
+    
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
@@ -250,27 +271,33 @@ def ask(
 @mcp.tool()
 def plan(
     query: str,
-    max_tokens: Optional[int] = None,
-    file_provider: Optional[Literal["gemini", "openai", "anthropic", "perplexity", "modelbox", "openrouter"]] = None,
-    thinking_provider: Optional[Literal["gemini", "openai", "anthropic", "perplexity", "modelbox", "openrouter"]] = None,
-    file_model: Optional[str] = None,
-    thinking_model: Optional[str] = None,
-    save_to: Optional[str] = None,
-    ctx: Context = None
+    ctx: Context = None,
+    **kwargs
 ) -> str:
     """Generate a focused implementation plan using AI.
     
     Uses multiple AI models to identify relevant files and generate a detailed plan.
+    
+    Parameters:
+        query: The implementation task to plan
+        max_tokens: Optional[int] - Maximum tokens for response
+        file_provider: Optional[str] - Provider for file identification
+        thinking_provider: Optional[str] - Provider for plan generation
+        file_model: Optional[str] - Model for file identification
+        thinking_model: Optional[str] - Model for plan generation
+        save_to: Optional[str] - Path to save response
     """
     command = [cursor_tools_exec, "plan", query]
-    params = {
-        "max_tokens": max_tokens,
-        "file_provider": file_provider,
-        "thinking_provider": thinking_provider,
-        "file_model": file_model,
-        "thinking_model": thinking_model,
-        "save_to": save_to
-    }
+    
+    # Extract known parameters from kwargs
+    params = {}
+    valid_params = ["max_tokens", "file_provider", "thinking_provider", 
+                   "file_model", "thinking_model", "save_to"]
+    
+    for param in valid_params:
+        if param in kwargs and kwargs[param] is not None:
+            params[param] = kwargs[param]
+    
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
@@ -279,25 +306,31 @@ def plan(
 @mcp.tool()
 def web(
     query: str,
-    max_tokens: Optional[int] = None,
-    provider: Optional[Literal["perplexity", "gemini", "modelbox", "openrouter"]] = None,
-    model: Optional[str] = None,
-    max_search_results: Optional[int] = None,
-    save_to: Optional[str] = None,
-    ctx: Context = None
+    ctx: Context = None,
+    **kwargs
 ) -> str:
     """Get answers from the web using an AI model with search capabilities.
     
     Web is a smart autonomous agent with internet access - not just a search engine.
+    
+    Parameters:
+        query: Question to search the web for
+        max_tokens: Optional[int] - Maximum tokens for response
+        provider: Optional[str] - AI provider with web search capabilities
+        model: Optional[str] - Model name to use
+        max_search_results: Optional[int] - Maximum search results to consider
+        save_to: Optional[str] - Path to save response
     """
     command = [cursor_tools_exec, "web", query]
-    params = {
-        "max_tokens": max_tokens,
-        "provider": provider,
-        "model": model,
-        "max_search_results": max_search_results,
-        "save_to": save_to
-    }
+    
+    # Extract known parameters from kwargs
+    params = {}
+    valid_params = ["max_tokens", "provider", "model", "max_search_results", "save_to"]
+    
+    for param in valid_params:
+        if param in kwargs and kwargs[param] is not None:
+            params[param] = kwargs[param]
+    
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
@@ -306,75 +339,91 @@ def web(
 @mcp.tool()
 def repo(
     query: str,
-    max_tokens: Optional[int] = None,
-    provider: Optional[Literal["gemini", "openai", "openrouter", "perplexity", "modelbox"]] = None,
-    model: Optional[str] = None,
-    from_github: Optional[bool] = None,
-    repo_url: Optional[str] = None,
-    subdir: Optional[str] = None,
-    save_to: Optional[str] = None,
-    ctx: Context = None
+    ctx: Context = None,
+    **kwargs
 ) -> str:
     """Get context-aware answers about a repository using AI.
     
     Provides intelligent insights based on repository content. Can analyze specific 
     subdirectories or remote GitHub repositories.
+    
+    Parameters:
+        query: Question about the repository
+        max_tokens: Optional[int] - Maximum tokens for response
+        provider: Optional[str] - AI provider to use
+        model: Optional[str] - Model name to use
+        from_github: Optional[bool] - Analyze remote GitHub repository
+        repo_url: Optional[str] - URL of GitHub repository
+        subdir: Optional[str] - Analyze specific subdirectory
+        save_to: Optional[str] - Path to save response
     """
     command = [cursor_tools_exec, "repo", query]
-    params = {
-        "max_tokens": max_tokens,
-        "provider": provider,
-        "model": model,
-        "repo_url": repo_url,
-        "subdir": subdir,
-        "save_to": save_to,
-        "from_github": from_github
-    }
+    
+    # Extract known parameters from kwargs
+    params = {}
+    valid_params = ["max_tokens", "provider", "model", "repo_url", 
+                   "subdir", "save_to", "from_github"]
+    
+    for param in valid_params:
+        if param in kwargs and kwargs[param] is not None:
+            params[param] = kwargs[param]
+    
     path_params = ["save_to", "subdir"]
     boolean_params = ["from_github"]
     
+    # Check if from_github is in params
+    from_github = params.get("from_github", False)
+    
     command_args = build_command_args(command, params, path_params, boolean_params)
-    return run_cursor_tools(command_args, ctx, from_github or False)
+    return run_cursor_tools(command_args, ctx, from_github)
 
 @mcp.tool()
 def doc(
     query: Optional[str] = None,
-    max_tokens: Optional[int] = None,
-    provider: Optional[Literal["gemini", "openai", "openrouter", "perplexity", "modelbox"]] = None,
-    model: Optional[str] = None,
-    from_github: Optional[bool] = None,
-    repo_url: Optional[str] = None,
-    output: Optional[str] = None,
-    save_to: Optional[str] = None,
-    ctx: Context = None
+    ctx: Context = None,
+    **kwargs
 ) -> str:
     """Generate comprehensive documentation for a repository.
     
     Can document local or remote GitHub repositories.
+    
+    Parameters:
+        query: Optional query to focus documentation
+        max_tokens: Optional[int] - Maximum tokens for response
+        provider: Optional[str] - AI provider to use
+        model: Optional[str] - Model name to use
+        from_github: Optional[bool] - Document remote GitHub repository
+        repo_url: Optional[str] - URL of GitHub repository
+        output: Optional[str] - Output file path
+        save_to: Optional[str] - Alternative to output parameter
     """
     command = [cursor_tools_exec, "doc"]
     if query:
         command.append(query)
-        
-    params = {
-        "max_tokens": max_tokens,
-        "provider": provider,
-        "model": model,
-        "repo_url": repo_url,
-        "from_github": from_github
-    }
+    
+    # Extract known parameters from kwargs
+    params = {}
+    valid_params = ["max_tokens", "provider", "model", "repo_url", 
+                   "from_github", "output", "save_to"]
+    
+    for param in valid_params:
+        if param in kwargs and kwargs[param] is not None:
+            params[param] = kwargs[param]
     
     # Handle output or save_to parameter
-    if output is not None:
-        params["output"] = output
-    elif save_to is not None:
-        params["output"] = save_to
+    if "output" in params and params["output"] is not None:
+        pass  # Use the output parameter as is
+    elif "save_to" in params and params["save_to"] is not None:
+        params["output"] = params.pop("save_to")  # Use save_to as output
     
     path_params = ["output"]
     boolean_params = ["from_github"]
     
+    # Check if from_github is in params
+    from_github = params.get("from_github", False)
+    
     command_args = build_command_args(command, params, path_params, boolean_params)
-    return run_cursor_tools(command_args, ctx, from_github or False)
+    return run_cursor_tools(command_args, ctx, from_github)
 
 @mcp.tool()
 def youtube(
