@@ -4,14 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cursor-tools-mcp"
-version = "2.1.0"
+version = "2.1.1"
 description = "MCP server for cursor-tools"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
-    "fastmcp>=0.2.0",
-    "tomli>=2.0.0",
+    "fastmcp>=0.1.0",
 ]
 
 [project.scripts]
