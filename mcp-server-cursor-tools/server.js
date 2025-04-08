@@ -1,24 +1,40 @@
-const express = require('express');
-const { spawn } = require('child_process');
-const path = require('path');
-const fs = require('fs'); // Import fs module
-const app = express();
-const port = process.env.PORT || 3000; // Allow port configuration via environment variable
+// Import necessary modules
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
+import { spawn } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import fs from 'fs/promises';
+import { existsSync, statSync } from 'fs';
 
-app.use(express.json());
+// For __dirname equivalent in ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Define the default workspace root - can be changed by set_working_directory
+// --- Configuration ---
+const SERVER_NAME = "cursor-tools-mcp";
+const SERVER_VERSION = "1.1.0"; // Updated version
 const DEFAULT_WORKSPACE_ROOT = '/Users/jason/mcp/mcp-vibe-tools';
 let currentWorkingDirectory = DEFAULT_WORKSPACE_ROOT; // Mutable working directory
+const DEBUG = process.env.DEBUG === 'true'; // Enable debug logging with env var
 
-// Helper function to run cursor-tools command
-// Removed default value for workingDir, it must be specified explicitly or default to process.cwd()
-function runCursorTools(commandArgs, workingDir) {
+// Helper for debug logging that doesn't interfere with MCP protocol
+function debugLog(message) {
+    if (DEBUG) {
+        process.stderr.write(`DEBUG: ${message}\n`);
+    }
+}
+
+// --- Helper: Run cursor-tools command ---
+// Adjusted to return MCP-compatible success/error structure
+async function runCursorTools(commandArgs, workingDir) {
     const cwd = workingDir || process.cwd(); // Default to server's CWD if not specified
-    return new Promise((resolve, reject) => {
-        console.log(`Executing: cursor-tools ${commandArgs.join(' ')} in ${cwd}`);
+
+    return new Promise((resolve) => { // Changed to always resolve
+        debugLog(`Executing: cursor-tools ${commandArgs.join(' ')} in ${cwd}`);
         const proc = spawn('cursor-tools', commandArgs, {
-            cwd: cwd, // Use the determined working directory
+            cwd: cwd,
             shell: true, // Use shell to handle paths and environment correctly
             env: { ...process.env } // Pass environment variables
         });
@@ -28,638 +44,320 @@ function runCursorTools(commandArgs, workingDir) {
 
         proc.stdout.on('data', (data) => {
             stdoutData += data.toString();
-            console.log(`stdout: ${data}`);
+            debugLog(`stdout: ${data}`);
         });
 
         proc.stderr.on('data', (data) => {
             stderrData += data.toString();
-            console.error(`stderr: ${data}`);
+            debugLog(`stderr: ${data}`);
         });
 
         proc.on('close', (code) => {
-            console.log(`child process exited with code ${code}`);
+            debugLog(`child process exited with code ${code}`);
             if (code === 0) {
-                resolve({ success: true, output: stdoutData });
+                // Resolve with success and text content
+                resolve({
+                    content: [{ type: 'text', text: `Command successful:\n${stdoutData}` }]
+                });
             } else {
-                // Include stderr in the rejection for better debugging
-                reject({ success: false, error: `Command failed with code ${code}`, stdout: stdoutData, stderr: stderrData });
+                // Resolve with error indication and text content including stderr
+                resolve({
+                    content: [{ type: 'text', text: `Command failed with code ${code}:\nStdout:\n${stdoutData}\nStderr:\n${stderrData}` }],
+                    isError: true
+                });
             }
         });
 
         proc.on('error', (err) => {
-            console.error('Failed to start subprocess.', err);
-            reject({ success: false, error: 'Failed to start subprocess', details: err });
+            debugLog(`Failed to start subprocess: ${err}`);
+            // Resolve with error indication
+            resolve({
+                content: [{ type: 'text', text: `Failed to start subprocess: ${err.message}` }],
+                isError: true
+            });
         });
     });
 }
 
-// --- MCP Tool Definitions ---
-
-// 1. ask
-app.post('/mcp/tools/ask', async (req, res) => {
-    const {
-        query, // required
-        provider,
-        model,
-        reasoning_effort,
-        max_tokens,
-        save_to
-        // Add any other relevant params from your detailed plan
-    } = req.body;
-
-    if (!query) {
-        return res.status(400).json({ success: false, error: "Missing required parameter: query" });
-    }
-
-    const commandArgs = ['ask', `"${query}"`]; // Ensure query is quoted
-
-    if (provider) commandArgs.push(`--provider=${provider}`);
-    if (model) commandArgs.push(`--model=${model}`); // ask requires model
-    if (reasoning_effort) commandArgs.push(`--reasoning-effort=${reasoning_effort}`);
-    if (max_tokens) commandArgs.push(`--max-tokens=${max_tokens}`);
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`); // Resolve save_to path relative to *current* working dir
-
-    try {
-        // 'ask' doesn't strictly need workspace context, run from server's CWD
-        const result = await runCursorTools(commandArgs); // No workingDir specified, defaults to process.cwd()
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'ask' command:", error);
-        // Send back detailed error info from the catch block
-        res.status(500).json({
-             success: false,
-             error: error.error || 'Internal Server Error',
-             stdout: error.stdout,
-             stderr: error.stderr,
-             details: error.details
-         });
-    }
+// --- Initialize MCP Server ---
+const server = new McpServer({
+    name: SERVER_NAME,
+    version: SERVER_VERSION,
 });
 
-// 2. plan
-app.post('/mcp/tools/plan', async (req, res) => {
-    const {
-        query, // required
-        fileProvider,
-        thinkingProvider,
-        fileModel,
-        thinkingModel,
-        fileMaxTokens,
-        thinkingMaxTokens,
-        save_to
-    } = req.body;
+// Helper function to build command args, resolving paths
+function buildCommandArgs(baseArgs, params) {
+    const commandArgs = [...baseArgs];
+    const { save_to, buildPath, video, screenshot, ...rest } = params; // Handle path params separately
 
-    if (!query) {
-        return res.status(400).json({ success: false, error: "Missing required parameter: query" });
+    for (const [key, value] of Object.entries(rest)) {
+        if (value !== undefined && value !== null) {
+            // Convert camelCase to kebab-case for command line flags
+            const flagName = key.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`);
+
+            // Handle boolean flags (presence indicates true)
+            if (typeof value === 'boolean' && value === true) {
+                commandArgs.push(`--${flagName}`);
+            } else if (typeof value === 'boolean' && value === false) {
+                 commandArgs.push(`--no-${flagName}`); // Handle --no-<flag> convention
+            }
+            // Handle string/number flags
+            else if (typeof value !== 'boolean') {
+                 // Quote values containing spaces, unless it's a known flag that shouldn't be (like number)
+                 const shouldQuote = typeof value === 'string' && value.includes(' ') && !['number', 'max_tokens', 'timeout'].includes(flagName);
+                 const formattedValue = shouldQuote ? `"${value}"` : value;
+                 commandArgs.push(`--${flagName}=${formattedValue}`);
+            }
+        }
     }
 
-    const commandArgs = ['plan', `"${query}"`];
-
-    if (fileProvider) commandArgs.push(`--fileProvider=${fileProvider}`);
-    if (thinkingProvider) commandArgs.push(`--thinkingProvider=${thinkingProvider}`);
-    if (fileModel) commandArgs.push(`--fileModel=${fileModel}`);
-    if (thinkingModel) commandArgs.push(`--thinkingModel=${thinkingModel}`);
-    if (fileMaxTokens) commandArgs.push(`--fileMaxTokens=${fileMaxTokens}`);
-    if (thinkingMaxTokens) commandArgs.push(`--thinkingMaxTokens=${thinkingMaxTokens}`);
+    // Resolve path arguments relative to currentWorkingDirectory
     if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        // 'plan' requires workspace context
-        const result = await runCursorTools(commandArgs, currentWorkingDirectory); // Use currentWorkingDirectory
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'plan' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// 3. web
-app.post('/mcp/tools/web', async (req, res) => {
-    const {
-        query, // required
-        provider,
-        model,
-        max_tokens,
-        save_to
-    } = req.body;
-
-    if (!query) {
-        return res.status(400).json({ success: false, error: "Missing required parameter: query" });
-    }
-
-    const commandArgs = ['web', `"${query}"`];
-
-    if (provider) commandArgs.push(`--provider=${provider}`);
-    if (model) commandArgs.push(`--model=${model}`);
-    if (max_tokens) commandArgs.push(`--max-tokens=${max_tokens}`);
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        // 'web' doesn't strictly need workspace context
-        const result = await runCursorTools(commandArgs); // No workingDir specified
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'web' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// 4. repo
-app.post('/mcp/tools/repo', async (req, res) => {
-    const {
-        query, // required
-        subdir,
-        from_github,
-        provider,
-        model,
-        max_tokens,
-        save_to
-    } = req.body;
-
-    if (!query) {
-        return res.status(400).json({ success: false, error: "Missing required parameter: query" });
-    }
-
-    const commandArgs = ['repo', `"${query}"`];
-
-    if (subdir) commandArgs.push(`--subdir=${subdir}`); // subdir is relative to WORKSPACE_ROOT if not using from_github
-    if (from_github) commandArgs.push(`--from-github=${from_github}`);
-    if (provider) commandArgs.push(`--provider=${provider}`);
-    if (model) commandArgs.push(`--model=${model}`);
-    if (max_tokens) commandArgs.push(`--max-tokens=${max_tokens}`);
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        // 'repo' requires workspace context unless --from-github is used
-        const executionDir = from_github ? process.cwd() : currentWorkingDirectory; // Use currentWorkingDirectory if local
-        const result = await runCursorTools(commandArgs, executionDir);
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'repo' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// 5. doc
-app.post('/mcp/tools/doc', async (req, res) => {
-    const {
-        from_github,
-        provider,
-        model,
-        max_tokens,
-        hint,
-        save_to // Required according to docs
-    } = req.body;
-
-    // Note: 'doc' command itself might not require a query parameter unlike others,
-    // but it does require outputting to a file (implicitly or via save_to).
-    // We enforce save_to for clarity in the MCP tool.
-    if (!save_to) {
-        return res.status(400).json({ success: false, error: "Missing required parameter: save_to" });
-    }
-
-    const commandArgs = ['doc'];
-
-    if (from_github) commandArgs.push(`--from-github=${from_github}`);
-    if (provider) commandArgs.push(`--provider=${provider}`);
-    if (model) commandArgs.push(`--model=${model}`);
-    if (max_tokens) commandArgs.push(`--max-tokens=${max_tokens}`);
-    if (hint) commandArgs.push(`--hint="${hint}"`); // Quote hint
-    commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`); // Always resolve save_to path relative to current dir
-
-    try {
-        // 'doc' requires workspace context unless --from-github is used
-        const executionDir = from_github ? process.cwd() : currentWorkingDirectory; // Use currentWorkingDirectory if local
-        const result = await runCursorTools(commandArgs, executionDir);
-        // Since output goes to file, maybe return file path or confirmation?
-        // For now, return the process output which might indicate success/failure.
-        res.json({ ...result, savedToFile: path.resolve(currentWorkingDirectory, save_to) });
-    } catch (error) {
-        console.error("Error executing 'doc' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// 6. youtube
-app.post('/mcp/tools/youtube', async (req, res) => {
-    const {
-        url, // required
-        question,
-        type, // enum: summary|transcript|plan|review|custom
-        save_to
-    } = req.body;
-
-    if (!url) {
-        return res.status(400).json({ success: false, error: "Missing required parameter: url" });
-    }
-
-    const commandArgs = ['youtube', `"${url}"`];
-
-    if (question) commandArgs.push(`"${question}"`); // Positional argument, quote it
-    if (type) commandArgs.push(`--type=${type}`);
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        // 'youtube' doesn't need specific workspace context
-        const result = await runCursorTools(commandArgs); // No workingDir specified
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'youtube' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// 7. github pr
-app.post('/mcp/tools/github/pr', async (req, res) => {
-    const {
-        number,
-        from_github,
-        save_to
-    } = req.body;
-
-    const commandArgs = ['github', 'pr'];
-
-    if (number) commandArgs.push(number.toString()); // Positional argument
-    if (from_github) commandArgs.push(`--from-github=${from_github}`);
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        // Requires workspace context unless --from-github is used
-        const executionDir = from_github ? process.cwd() : currentWorkingDirectory; // Use currentWorkingDirectory if local
-        const result = await runCursorTools(commandArgs, executionDir);
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'github pr' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// 8. github issue
-app.post('/mcp/tools/github/issue', async (req, res) => {
-    const {
-        number,
-        from_github,
-        save_to
-    } = req.body;
-
-    const commandArgs = ['github', 'issue'];
-
-    if (number) commandArgs.push(number.toString()); // Positional argument
-    if (from_github) commandArgs.push(`--from-github=${from_github}`);
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        // Requires workspace context unless --from-github is used
-        const executionDir = from_github ? process.cwd() : currentWorkingDirectory; // Use currentWorkingDirectory if local
-        const result = await runCursorTools(commandArgs, executionDir);
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'github issue' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// 9. clickup task
-app.post('/mcp/tools/clickup/task', async (req, res) => {
-    const {
-        task_id, // required
-        save_to
-    } = req.body;
-
-    if (!task_id) {
-        return res.status(400).json({ success: false, error: "Missing required parameter: task_id" });
-    }
-
-    const commandArgs = ['clickup', 'task', task_id]; // task_id is positional
-
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        // 'clickup' doesn't need specific workspace context
-        const result = await runCursorTools(commandArgs); // No workingDir specified
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'clickup task' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// 10. mcp search
-app.post('/mcp/tools/mcp/search', async (req, res) => {
-    const {
-        query, // required
-        provider,
-        save_to
-    } = req.body;
-
-    if (!query) {
-        return res.status(400).json({ success: false, error: "Missing required parameter: query" });
-    }
-
-    const commandArgs = ['mcp', 'search', `"${query}"`];
-
-    if (provider) commandArgs.push(`--provider=${provider}`);
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        const result = await runCursorTools(commandArgs); // No workingDir specified
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'mcp search' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// 11. mcp run
-app.post('/mcp/tools/mcp/run', async (req, res) => {
-    const {
-        query, // required
-        provider,
-        save_to
-    } = req.body;
-
-    if (!query) {
-        return res.status(400).json({ success: false, error: "Missing required parameter: query" });
-    }
-
-    const commandArgs = ['mcp', 'run', `"${query}"`];
-
-    if (provider) commandArgs.push(`--provider=${provider}`);
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        const result = await runCursorTools(commandArgs); // No workingDir specified
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'mcp run' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// Helper function for browser act/observe/extract commands
-async function handleBrowserAction(commandType, req, res) {
-    const {
-        instruction, // required
-        url, // required
-        html, // boolean
-        console: captureConsole, // boolean
-        network, // boolean
-        screenshot,
-        timeout,
-        viewport,
-        headless, // boolean
-        connect_to,
-        wait,
-        video,
-        evaluate,
-        save_to
-    } = req.body;
-
-    if (!instruction) {
-        return res.status(400).json({ success: false, error: `Missing required parameter: instruction for ${commandType}` });
-    }
-    if (!url) {
-        return res.status(400).json({ success: false, error: `Missing required parameter: url for ${commandType}` });
-    }
-
-    // URL is handled via --url option for these commands, instruction is positional
-    const commandArgs = ['browser', commandType, `"${instruction}"`, `--url="${url}"`];
-
-    if (html === true) commandArgs.push('--html');
-    if (captureConsole === false) commandArgs.push('--no-console');
-    if (network === false) commandArgs.push('--no-network');
-    if (screenshot) commandArgs.push(`--screenshot=${path.resolve(currentWorkingDirectory, screenshot)}`);
-    if (timeout) commandArgs.push(`--timeout=${timeout}`);
-    if (viewport) commandArgs.push(`--viewport=${viewport}`);
-    if (headless === false) commandArgs.push('--no-headless');
-    if (connect_to) commandArgs.push(`--connect-to=${connect_to}`);
-    if (wait) commandArgs.push(`--wait="${wait}"`);
+    if (buildPath) commandArgs.push(`buildPath=${path.resolve(currentWorkingDirectory, buildPath)}`); // xcode build specific format
     if (video) commandArgs.push(`--video=${path.resolve(currentWorkingDirectory, video)}`);
-    if (evaluate) commandArgs.push(`--evaluate="${evaluate}"`);
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
+    if (screenshot) commandArgs.push(`--screenshot=${path.resolve(currentWorkingDirectory, screenshot)}`);
+
+
+    // Ensure quoted positional args if they contain spaces
+    if (params.query && typeof params.query === 'string' && params.query.includes(' ')) {
+        const queryIndex = commandArgs.findIndex(arg => arg === params.query);
+        if (queryIndex !== -1) commandArgs[queryIndex] = `"${params.query}"`;
+    }
+     if (params.instruction && typeof params.instruction === 'string' && params.instruction.includes(' ')) {
+        const instructionIndex = commandArgs.findIndex(arg => arg === params.instruction);
+        if (instructionIndex !== -1) commandArgs[instructionIndex] = `"${params.instruction}"`;
+    }
+     if (params.url && typeof params.url === 'string' && params.url.includes(' ')) {
+        const urlIndex = commandArgs.findIndex(arg => arg === params.url);
+        if (urlIndex !== -1) commandArgs[urlIndex] = `"${params.url}"`;
+    }
+     if (params.question && typeof params.question === 'string' && params.question.includes(' ')) {
+        const questionIndex = commandArgs.findIndex(arg => arg === params.question);
+        if (questionIndex !== -1) commandArgs[questionIndex] = `"${params.question}"`;
+    }
+     if (params.hint && typeof params.hint === 'string' && params.hint.includes(' ')) {
+        const hintIndex = commandArgs.findIndex(arg => arg === `--hint=${params.hint}`);
+        if (hintIndex !== -1) commandArgs[hintIndex] = `--hint="${params.hint}"`;
+    }
+     if (params.evaluate && typeof params.evaluate === 'string') { // Evaluate often has complex chars
+        const evaluateIndex = commandArgs.findIndex(arg => arg === `--evaluate=${params.evaluate}`);
+        if (evaluateIndex !== -1) commandArgs[evaluateIndex] = `--evaluate="${params.evaluate}"`;
+     }
+     if (params.wait && typeof params.wait === 'string' && params.wait.includes(' ')) {
+        const waitIndex = commandArgs.findIndex(arg => arg === `--wait=${params.wait}`);
+        if (waitIndex !== -1) commandArgs[waitIndex] = `--wait="${params.wait}"`;
+    }
+     if (params.destination && typeof params.destination === 'string' && params.destination.includes(' ')) {
+        const destIndex = commandArgs.findIndex(arg => arg === `destination=${params.destination}`);
+        if (destIndex !== -1) commandArgs[destIndex] = `destination="${params.destination}"`;
+     }
+
+    return commandArgs;
+}
+
+// First, let's add a simple test tool to see if it works
+server.tool(
+    'test',
+    z.object({
+        message: z.string().describe("Test message to echo back")
+    }).describe("Test tool that simply echoes back the input message"),
+    async (params) => {
+        return {
+            content: [{ type: 'text', text: `Test successful! Your message: ${params.message}` }]
+        };
+    }
+);
+
+// Now add a simple cursor-tools command to test the functionality
+server.tool(
+    'ask',
+    z.object({
+        query: z.string().describe("The question to ask"),
+        provider: z.enum(['openai', 'anthropic', 'perplexity', 'gemini', 'modelbox', 'openrouter']).optional().describe("AI provider to use"),
+        model: z.string().optional().describe("Model to use"),
+        maxTokens: z.number().optional().describe("Maximum tokens for response"),
+        save_to: z.string().optional().describe("Path to save output"),
+    }).describe("Ask any model from any provider a direct question"),
+    async (params) => {
+        const baseArgs = ['ask', params.query];
+        const commandArgs = buildCommandArgs(baseArgs, params);
+        return await runCursorTools(commandArgs);
+    }
+);
+
+// Add web tool
+server.tool(
+    'web',
+    z.object({
+        query: z.string().describe("The search query"),
+        provider: z.enum(['openai', 'anthropic', 'perplexity', 'gemini', 'modelbox', 'openrouter']).optional().describe("AI provider to use"),
+        model: z.string().optional().describe("Model to use"),
+        maxTokens: z.number().optional().describe("Maximum tokens for response"),
+        save_to: z.string().optional().describe("Path to save output"),
+    }).describe("Get answers from the web using providers like Perplexity or Gemini"),
+    async (params) => {
+        const baseArgs = ['web', params.query];
+        const commandArgs = buildCommandArgs(baseArgs, params);
+        return await runCursorTools(commandArgs);
+    }
+);
+
+// Add repo tool
+server.tool(
+    'repo',
+    z.object({
+        query: z.string().describe("The repository query"),
+        subdir: z.string().optional().describe("Subdirectory to analyze"),
+        from_github: z.string().optional().describe("GitHub username/repo[@branch]"),
+        provider: z.enum(['openai', 'anthropic', 'perplexity', 'gemini', 'modelbox', 'openrouter']).optional().describe("AI provider to use"),
+        model: z.string().optional().describe("Model to use"),
+        maxTokens: z.number().optional().describe("Maximum tokens for response"),
+        save_to: z.string().optional().describe("Path to save output"),
+    }).describe("Get context-aware answers about the repository"),
+    async (params) => {
+        const baseArgs = ['repo', params.query];
+        const commandArgs = buildCommandArgs(baseArgs, params);
+        const executionDir = params.from_github ? process.cwd() : currentWorkingDirectory;
+        return await runCursorTools(commandArgs, executionDir);
+    }
+);
+
+// Add doc tool
+server.tool(
+    'doc',
+    z.object({
+        output: z.string().optional().describe("Path to save documentation"),
+        hint: z.string().optional().describe("Optional hint for documentation focus"),
+        from_github: z.string().optional().describe("GitHub username/repo[@branch]"),
+        provider: z.enum(['openai', 'anthropic', 'perplexity', 'gemini', 'modelbox', 'openrouter']).optional().describe("AI provider to use"),
+        model: z.string().optional().describe("Model to use"),
+        maxTokens: z.number().optional().describe("Maximum tokens for response"),
+        save_to: z.string().optional().describe("Path to save output"),
+    }).describe("Generate comprehensive documentation for the repository"),
+    async (params) => {
+        const saveTo = params.output || params.save_to;
+        if (!saveTo) {
+            return { 
+                content: [{ type: 'text', text: 'Error: Missing required parameter: output or save_to' }],
+                isError: true 
+            };
+        }
+        
+        const baseArgs = ['doc'];
+        const commandArgs = buildCommandArgs(baseArgs, { ...params, save_to: saveTo, output: undefined });
+        const executionDir = params.from_github ? process.cwd() : currentWorkingDirectory;
+        const result = await runCursorTools(commandArgs, executionDir);
+        
+        if (!result.isError) {
+            result.content.push({ 
+                type: 'text', 
+                text: `\nDocumentation saved to: ${path.resolve(executionDir, saveTo)}` 
+            });
+        }
+        
+        return result;
+    }
+);
+
+// Add browser open tool
+server.tool(
+    'browser_open',
+    z.object({
+        url: z.string().url().describe("URL to open"),
+        html: z.boolean().optional().describe("Capture page HTML content"),
+        console: z.boolean().optional().describe("Capture browser console logs"),
+        network: z.boolean().optional().describe("Capture network activity"),
+        screenshot: z.string().optional().describe("Path to save screenshot"),
+        timeout: z.number().int().positive().optional().describe("Navigation timeout in ms"),
+        viewport: z.string().regex(/^\d+x\d+$/).optional().describe("Viewport size"),
+        headless: z.boolean().optional().describe("Run browser in headless mode"),
+        connect_to: z.string().optional().describe("Connect to existing Chrome instance"),
+        wait: z.string().optional().describe("Wait condition"),
+        video: z.string().optional().describe("Directory to save video recording"),
+        evaluate: z.string().optional().describe("JavaScript code to execute"),
+        save_to: z.string().optional().describe("Path to save output"),
+    }).describe("Open a URL and capture page content, logs, and network activity"),
+    async (params) => {
+        const baseArgs = ['browser', 'open', params.url];
+        const adjustedParams = { ...params };
+        
+        if (params.console === false) adjustedParams.noConsole = true;
+        if (params.network === false) adjustedParams.noNetwork = true;
+        if (params.headless === false) adjustedParams.noHeadless = true;
+        
+        delete adjustedParams.console;
+        delete adjustedParams.network;
+        delete adjustedParams.headless;
+        
+        const commandArgs = buildCommandArgs(baseArgs, adjustedParams);
+        return await runCursorTools(commandArgs);
+    }
+);
+
+// --- Meta Tool: Set Working Directory ---
+server.tool(
+    'set_working_directory',
+    z.object({
+        directoryPath: z.string().describe("The absolute or relative path to set as the new working directory"),
+    }).describe("Set the working directory for subsequent context-aware commands"),
+    async ({ directoryPath }) => {
+        const resolvedPath = path.resolve(currentWorkingDirectory, directoryPath); // Resolve relative to current CWD first
+        try {
+            const stats = await fs.stat(resolvedPath);
+            if (stats.isDirectory()) {
+                const oldDirectory = currentWorkingDirectory;
+                currentWorkingDirectory = resolvedPath; // Store the resolved absolute path
+                debugLog(`Working directory changed from ${oldDirectory} to ${currentWorkingDirectory}`);
+                return {
+                    content: [{ type: 'text', text: `Working directory successfully set to: ${currentWorkingDirectory}` }]
+                };
+            } else {
+                return {
+                    content: [{ type: 'text', text: `Error: Path is not a directory: ${resolvedPath}` }],
+                    isError: true
+                };
+            }
+        } catch (error) {
+            if (error.code === 'ENOENT') {
+                return {
+                    content: [{ type: 'text', text: `Error: Directory not found: ${resolvedPath}` }],
+                    isError: true
+                };
+            } else {
+                debugLog(`Error setting working directory: ${error}`);
+                return {
+                    content: [{ type: 'text', text: `Error: Failed to set working directory: ${error.message}` }],
+                    isError: true
+                };
+            }
+        }
+    }
+);
+
+// --- Start the Server with Stdio Transport ---
+async function main() {
+    process.stderr.write(`\n*** STARTING ${SERVER_NAME} v${SERVER_VERSION} ***\n`);
+    process.stderr.write(`Default Workspace Root: ${DEFAULT_WORKSPACE_ROOT}\n`);
+    process.stderr.write(`Initial Working Directory: ${currentWorkingDirectory}\n`);
+    process.stderr.write(`Node version: ${process.version}\n`);
 
     try {
-        const result = await runCursorTools(commandArgs); // Browser commands don't typically need specific workspace CWD
-        res.json(result);
-    } catch (error) {
-        console.error(`Error executing 'browser ${commandType}' command:`, error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
+        const transport = new StdioServerTransport();
+        await server.connect(transport);
+        process.stderr.write(`\n*** ${SERVER_NAME} CONNECTED VIA STDIO TRANSPORT AND READY ***\n`);
+    } catch (err) {
+        process.stderr.write(`Error during server startup: ${err}\n`);
+        process.exit(1);
     }
 }
 
-// 13. browser act
-app.post('/mcp/tools/browser/act', async (req, res) => {
-    await handleBrowserAction('act', req, res);
-});
-
-// 14. browser observe
-app.post('/mcp/tools/browser/observe', async (req, res) => {
-    await handleBrowserAction('observe', req, res);
-});
-
-// 15. browser extract
-app.post('/mcp/tools/browser/extract', async (req, res) => {
-    await handleBrowserAction('extract', req, res);
-});
-
-// 16. xcode build
-app.post('/mcp/tools/xcode/build', async (req, res) => {
-    const {
-        buildPath,
-        destination,
-        save_to
-    } = req.body;
-
-    const commandArgs = ['xcode', 'build'];
-
-    if (buildPath) commandArgs.push(`buildPath=${path.resolve(currentWorkingDirectory, buildPath)}`); // Resolve buildPath relative to current CWD
-    if (destination) commandArgs.push(`destination="${destination}"`); // Quote destination
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        // Xcode commands require workspace context
-        const result = await runCursorTools(commandArgs, currentWorkingDirectory); // Use currentWorkingDirectory
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'xcode build' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// 17. xcode run
-app.post('/mcp/tools/xcode/run', async (req, res) => {
-    const {
-        destination,
-        save_to
-    } = req.body;
-
-    const commandArgs = ['xcode', 'run'];
-
-    if (destination) commandArgs.push(`destination="${destination}"`); // Quote destination
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        // Xcode commands require workspace context
-        const result = await runCursorTools(commandArgs, currentWorkingDirectory); // Use currentWorkingDirectory
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'xcode run' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// 18. xcode lint
-app.post('/mcp/tools/xcode/lint', async (req, res) => {
-    const {
-        save_to
-    } = req.body;
-
-    const commandArgs = ['xcode', 'lint'];
-
-    if (save_to) commandArgs.push(`--save-to=${path.resolve(currentWorkingDirectory, save_to)}`);
-
-    try {
-        // Xcode commands require workspace context
-        const result = await runCursorTools(commandArgs, currentWorkingDirectory); // Use currentWorkingDirectory
-        res.json(result);
-    } catch (error) {
-        console.error("Error executing 'xcode lint' command:", error);
-        res.status(500).json({
-            success: false,
-            error: error.error || 'Internal Server Error',
-            stdout: error.stdout,
-            stderr: error.stderr,
-            details: error.details
-        });
-    }
-});
-
-// --- NEW Meta Tool: Set Working Directory ---
-app.post('/mcp/tools/set_working_directory', (req, res) => {
-    const { directoryPath } = req.body;
-
-    if (!directoryPath) {
-        return res.status(400).json({ success: false, error: "Missing required parameter: directoryPath" });
-    }
-
-    try {
-        // Check if path exists and is a directory
-        const stats = fs.statSync(directoryPath);
-        if (stats.isDirectory()) {
-            const oldDirectory = currentWorkingDirectory;
-            currentWorkingDirectory = path.resolve(directoryPath); // Store the absolute path
-            console.log(`Working directory changed from ${oldDirectory} to ${currentWorkingDirectory}`);
-            res.json({ success: true, message: `Working directory set to: ${currentWorkingDirectory}` });
-        } else {
-            res.status(400).json({ success: false, error: `Path is not a directory: ${directoryPath}` });
-        }
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            res.status(404).json({ success: false, error: `Directory not found: ${directoryPath}` });
-        } else {
-            console.error("Error setting working directory:", error);
-            res.status(500).json({ success: false, error: `Failed to set working directory: ${error.message}` });
-        }
-    }
-});
-
-// --- Server Start ---
-// Only start listening if the script is run directly
-if (require.main === module) {
-    app.listen(port, () => {
-        console.log(`MCP Server for cursor-tools listening on port ${port}`);
-        console.log(`Default Workspace Root: ${DEFAULT_WORKSPACE_ROOT}`);
-        console.log(`Initial Working Directory: ${currentWorkingDirectory}`); // Log initial CWD
-        // Log available environment variables that cursor-tools might need (optional, for debugging)
-        console.log("Checking required ENV variables:");
-        ['PERPLEXITY_API_KEY', 'GEMINI_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'GITHUB_TOKEN', 'CLICKUP_API_TOKEN'].forEach(key => {
-            console.log(`  ${key}: ${process.env[key] ? 'Set' : 'Not Set'}`);
-        });
+// Execute main function if the script is run directly
+if (import.meta.url === `file://${process.argv[1]}`) {
+    main().catch(err => {
+        process.stderr.write(`Failed to start MCP server: ${err}\n`);
+        process.exit(1);
     });
 }
 
-// Basic root endpoint for health check or info
-app.get('/', (req, res) => {
-    res.send(`MCP Server for cursor-tools is running.\nCurrent Working Directory: ${currentWorkingDirectory}`); // Show current CWD
-});
-
-// Export the app for testing
-module.exports = app; 
+// Export server for potential testing
+export default server;

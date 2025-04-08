@@ -2,7 +2,7 @@
 # cursor-tools
 .repomix*
 !.repomixignore
-cursor-tools.config.json
+**/cursor-tools.config.json
 
 cursor-tools/*
 
