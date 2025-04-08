@@ -88,28 +88,42 @@ def run_cursor_tools(
     if from_github:
         execution_dir = os.getcwd()
     
-    # Log command execution
-    ctx.info(f"Executing command: {' '.join(command_args)}")
-    ctx.info(f"Working directory: {execution_dir}")
-    
-    # Debug info
-    print(f"DEBUG: Running command: {' '.join(command_args)}", file=sys.stderr)
-    print(f"DEBUG: Working directory: {execution_dir}", file=sys.stderr)
-    
-    start_time = time.time()
-    line_count = 0
-    
-    # Report starting progress
-    ctx.report_progress(0, 100)
-    
-    # Run the command with realtime output processing
-    process = subprocess.Popen(
-        command_args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        cwd=execution_dir
-    )
+    try:
+        # Log command execution
+        ctx.info(f"Executing command: {' '.join(command_args)}")
+        ctx.info(f"Working directory: {execution_dir}")
+        
+        # Debug info
+        print(f"DEBUG: Running command: {' '.join(command_args)}", file=sys.stderr)
+        print(f"DEBUG: Working directory: {execution_dir}", file=sys.stderr)
+        
+        start_time = time.time()
+        line_count = 0
+        
+        # Report starting progress
+        ctx.report_progress(0, 100)
+        
+        # Run the command with realtime output processing
+        process = subprocess.Popen(
+            command_args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=execution_dir
+        )
+    except FileNotFoundError as e:
+        # Specific handling for missing cursor-tools executable
+        if 'cursor-tools' in str(e):
+            error_msg = "Error: cursor-tools executable not found. Set CURSOR_TOOLS_PATH environment variable to the absolute path of the cursor-tools executable."
+            ctx.error(error_msg)
+            return error_msg
+        else:
+            # Re-raise other FileNotFoundError
+            raise
+    except Exception as e:
+        error_msg = f"Error executing command: {str(e)}"
+        ctx.error(error_msg)
+        return error_msg
     
     stdout_lines = []
     stderr_lines = []
@@ -117,96 +131,105 @@ def run_cursor_tools(
     # Process output in real-time with progress updates
     last_progress_time = time.time()
     
-    try:
-        while True:
-            # Read with timeout to ensure progress updates even without output
-            current_time = time.time()
-            elapsed = current_time - start_time
+        try:
+            stdout_lines = []
+            stderr_lines = []
             
-            # Send heartbeat progress updates every 3 seconds
-            if current_time - last_progress_time >= 3:
-                progress_pct = min(int(elapsed / 3), 95)  # Cap at 95% until complete
-                ctx.report_progress(progress_pct, 100)
-                print(f"DEBUG: Progress heartbeat {progress_pct}%", file=sys.stderr)
-                last_progress_time = current_time
+            # Process output in real-time with progress updates
+            last_progress_time = time.time()
             
-            # Check if process has terminated
-            if process.poll() is not None:
-                # Process remaining output
-                remaining_stdout, remaining_stderr = process.communicate()
-                if remaining_stdout:
-                    for line in remaining_stdout.splitlines():
-                        stdout_lines.append(line)
-                        ctx.info(f"OUT: {line}")
-                        line_count += 1
-                if remaining_stderr:
-                    for line in remaining_stderr.splitlines():
-                        stderr_lines.append(line)
-                        ctx.info(f"ERR: {line}")
-                        print(f"DEBUG: STDERR: {line}", file=sys.stderr)
-                        line_count += 1
-                break
+            while True:
+                # Read with timeout to ensure progress updates even without output
+                current_time = time.time()
+                elapsed = current_time - start_time
                 
-            # Read stdout with timeout
-            stdout_line = process.stdout.readline() if process.stdout else ""
-            stderr_line = process.stderr.readline() if process.stderr else ""
+                # Send heartbeat progress updates every 3 seconds
+                if current_time - last_progress_time >= 3:
+                    progress_pct = min(int(elapsed / 3), 95)  # Cap at 95% until complete
+                    ctx.report_progress(progress_pct, 100)
+                    print(f"DEBUG: Progress heartbeat {progress_pct}%", file=sys.stderr)
+                    last_progress_time = current_time
+                
+                # Check if process has terminated
+                if process.poll() is not None:
+                    # Process remaining output
+                    remaining_stdout, remaining_stderr = process.communicate()
+                    if remaining_stdout:
+                        for line in remaining_stdout.splitlines():
+                            stdout_lines.append(line)
+                            ctx.info(f"OUT: {line}")
+                            line_count += 1
+                    if remaining_stderr:
+                        for line in remaining_stderr.splitlines():
+                            stderr_lines.append(line)
+                            ctx.info(f"ERR: {line}")
+                            print(f"DEBUG: STDERR: {line}", file=sys.stderr)
+                            line_count += 1
+                    break
+                    
+                # Read stdout with timeout
+                stdout_line = process.stdout.readline() if process.stdout else ""
+                stderr_line = process.stderr.readline() if process.stderr else ""
+                
+                if not stdout_line and not stderr_line:
+                    # No data, sleep briefly and continue
+                    time.sleep(0.1)
+                    continue
+                    
+                if stdout_line:
+                    line = stdout_line.rstrip()
+                    stdout_lines.append(line)
+                    ctx.info(f"OUT: {line}")
+                    line_count += 1
+                    
+                    # Update progress on each line
+                    elapsed = time.time() - start_time
+                    progress_pct = min(int(elapsed / 3), 95)
+                    ctx.report_progress(progress_pct, 100)
+                    last_progress_time = time.time()
+                    
+                if stderr_line:
+                    line = stderr_line.rstrip()
+                    stderr_lines.append(line)
+                    ctx.info(f"ERR: {line}")
+                    print(f"DEBUG: STDERR: {line}", file=sys.stderr)
+                    line_count += 1
+        except Exception as e:
+            print(f"DEBUG: Exception in subprocess handling: {str(e)}", file=sys.stderr)
+            ctx.error(f"Exception during command execution: {str(e)}")
+            # Try to terminate the process if still running
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
             
-            if not stdout_line and not stderr_line:
-                # No data, sleep briefly and continue
-                time.sleep(0.1)
-                continue
-                
-            if stdout_line:
-                line = stdout_line.rstrip()
-                stdout_lines.append(line)
-                ctx.info(f"OUT: {line}")
-                line_count += 1
-                
-                # Update progress on each line
-                elapsed = time.time() - start_time
-                progress_pct = min(int(elapsed / 3), 95)
-                ctx.report_progress(progress_pct, 100)
-                last_progress_time = time.time()
-                
-            if stderr_line:
-                line = stderr_line.rstrip()
-                stderr_lines.append(line)
-                ctx.info(f"ERR: {line}")
-                print(f"DEBUG: STDERR: {line}", file=sys.stderr)
-                line_count += 1
-    except Exception as e:
-        print(f"DEBUG: Exception in subprocess handling: {str(e)}", file=sys.stderr)
-        ctx.error(f"Exception during command execution: {str(e)}")
-        # Try to terminate the process if still running
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                process.kill()
+            # Re-raise to be caught by outer exception handler
+            raise
     
-    # Get return code
-    returncode = process.poll()
-    
-    # Calculate execution time
-    execution_time = time.time() - start_time
-    
-    # Report completion
-    ctx.report_progress(100, 100)
-    
-    # Debug info
-    print(f"DEBUG: Command finished with code {returncode}", file=sys.stderr)
-    print(f"DEBUG: Execution time: {execution_time:.2f} seconds", file=sys.stderr)
-    print(f"DEBUG: Processed {line_count} lines of output", file=sys.stderr)
-    
-    # Format the response
-    stdout = "\n".join(stdout_lines)
-    stderr = "\n".join(stderr_lines)
-    
-    if returncode == 0:
-        return f"Command successful:\n{stdout}"
-    else:
-        return f"Command failed with code {returncode}:\nStdout:\n{stdout}\nStderr:\n{stderr}"
+        # Get return code
+        returncode = process.poll()
+        
+        # Calculate execution time
+        execution_time = time.time() - start_time
+        
+        # Report completion
+        ctx.report_progress(100, 100)
+        
+        # Debug info
+        print(f"DEBUG: Command finished with code {returncode}", file=sys.stderr)
+        print(f"DEBUG: Execution time: {execution_time:.2f} seconds", file=sys.stderr)
+        print(f"DEBUG: Processed {line_count} lines of output", file=sys.stderr)
+        
+        # Format the response
+        stdout = "\n".join(stdout_lines)
+        stderr = "\n".join(stderr_lines)
+        
+        if returncode == 0:
+            return f"Command successful:\n{stdout}"
+        else:
+            return f"Command failed with code {returncode}:\nStdout:\n{stdout}\nStderr:\n{stderr}"
 
 @mcp.tool()
 def set_working_directory(directory_path: str) -> str:
