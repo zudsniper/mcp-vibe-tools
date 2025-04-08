@@ -2,13 +2,21 @@ from fastmcp import FastMCP, Context
 import subprocess
 import os
 import pathlib
+import sys
+import tomli
+import time
 from typing import Optional, List, Dict, Any, Literal, Union
+
+# Read version from pyproject.toml
+with open(pathlib.Path(__file__).parent / "pyproject.toml", "rb") as f:
+    pyproject = tomli.load(f)
+    VERSION = pyproject["project"]["version"]
 
 # Get cursor-tools path from environment or use default
 cursor_tools_exec = os.environ.get('CURSOR_TOOLS_PATH', 'cursor-tools')
 
 # Initialize FastMCP
-mcp = FastMCP("cursor-tools-mcp", version="1.1.0")
+mcp = FastMCP("cursor-tools-mcp", version=VERSION)
 
 # Global working directory
 current_working_directory = "/Users/jason/mcp/mcp-vibe-tools"
@@ -73,8 +81,15 @@ def run_cursor_tools(
     ctx.info(f"Executing command: {' '.join(command_args)}")
     ctx.info(f"Working directory: {execution_dir}")
     
+    # Debug info
+    print(f"DEBUG: Running command: {' '.join(command_args)}", file=sys.stderr)
+    print(f"DEBUG: Working directory: {execution_dir}", file=sys.stderr)
+    
+    start_time = time.time()
+    line_count = 0
+    
     # Report starting progress
-    ctx.report_progress(0, 1)
+    ctx.report_progress(0, 100)
     
     # Run the command with realtime output processing
     process = subprocess.Popen(
@@ -88,29 +103,90 @@ def run_cursor_tools(
     stdout_lines = []
     stderr_lines = []
     
-    # Process output in real-time
-    while True:
-        stdout_line = process.stdout.readline() if process.stdout else ""
-        stderr_line = process.stderr.readline() if process.stderr else ""
-        
-        if not stdout_line and not stderr_line and process.poll() is not None:
-            break
+    # Process output in real-time with progress updates
+    last_progress_time = time.time()
+    
+    try:
+        while True:
+            # Read with timeout to ensure progress updates even without output
+            current_time = time.time()
+            elapsed = current_time - start_time
             
-        if stdout_line:
-            line = stdout_line.rstrip()
-            stdout_lines.append(line)
-            ctx.info(f"OUT: {line}")
+            # Send heartbeat progress updates every 3 seconds
+            if current_time - last_progress_time >= 3:
+                progress_pct = min(int(elapsed / 3), 95)  # Cap at 95% until complete
+                ctx.report_progress(progress_pct, 100)
+                print(f"DEBUG: Progress heartbeat {progress_pct}%", file=sys.stderr)
+                last_progress_time = current_time
             
-        if stderr_line:
-            line = stderr_line.rstrip()
-            stderr_lines.append(line)
-            ctx.info(f"ERR: {line}")
+            # Check if process has terminated
+            if process.poll() is not None:
+                # Process remaining output
+                remaining_stdout, remaining_stderr = process.communicate()
+                if remaining_stdout:
+                    for line in remaining_stdout.splitlines():
+                        stdout_lines.append(line)
+                        ctx.info(f"OUT: {line}")
+                        line_count += 1
+                if remaining_stderr:
+                    for line in remaining_stderr.splitlines():
+                        stderr_lines.append(line)
+                        ctx.info(f"ERR: {line}")
+                        print(f"DEBUG: STDERR: {line}", file=sys.stderr)
+                        line_count += 1
+                break
+                
+            # Read stdout with timeout
+            stdout_line = process.stdout.readline() if process.stdout else ""
+            stderr_line = process.stderr.readline() if process.stderr else ""
+            
+            if not stdout_line and not stderr_line:
+                # No data, sleep briefly and continue
+                time.sleep(0.1)
+                continue
+                
+            if stdout_line:
+                line = stdout_line.rstrip()
+                stdout_lines.append(line)
+                ctx.info(f"OUT: {line}")
+                line_count += 1
+                
+                # Update progress on each line
+                elapsed = time.time() - start_time
+                progress_pct = min(int(elapsed / 3), 95)
+                ctx.report_progress(progress_pct, 100)
+                last_progress_time = time.time()
+                
+            if stderr_line:
+                line = stderr_line.rstrip()
+                stderr_lines.append(line)
+                ctx.info(f"ERR: {line}")
+                print(f"DEBUG: STDERR: {line}", file=sys.stderr)
+                line_count += 1
+    except Exception as e:
+        print(f"DEBUG: Exception in subprocess handling: {str(e)}", file=sys.stderr)
+        ctx.error(f"Exception during command execution: {str(e)}")
+        # Try to terminate the process if still running
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
     
     # Get return code
     returncode = process.poll()
     
+    # Calculate execution time
+    execution_time = time.time() - start_time
+    
     # Report completion
-    ctx.report_progress(1, 1)
+    ctx.report_progress(100, 100)
+    
+    # Debug info
+    print(f"DEBUG: Command finished with code {returncode}", file=sys.stderr)
+    print(f"DEBUG: Execution time: {execution_time:.2f} seconds", file=sys.stderr)
+    print(f"DEBUG: Processed {line_count} lines of output", file=sys.stderr)
     
     # Format the response
     stdout = "\n".join(stdout_lines)
