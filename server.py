@@ -79,9 +79,9 @@ def build_command_args(
     
     return command_args
 
-def run_cursor_tools(
+async def run_cursor_tools(
     command_args: List[str],
-    ctx: Context,
+    ctx: Optional[Context] = None,
     from_github: bool = False
 ) -> str:
     """Run the cursor-tools command and format the response."""
@@ -92,8 +92,9 @@ def run_cursor_tools(
     
     try:
         # Log command execution
-        ctx.info(f"Executing command: {' '.join(command_args)}")
-        ctx.info(f"Working directory: {execution_dir}")
+        if ctx:
+            await ctx.info(f"Executing command: {' '.join(command_args)}")
+            await ctx.info(f"Working directory: {execution_dir}")
         
         # Debug info
         print(f"DEBUG: Running command: {' '.join(command_args)}", file=sys.stderr)
@@ -103,7 +104,8 @@ def run_cursor_tools(
         line_count = 0
         
         # Report starting progress
-        ctx.report_progress(0, 100)
+        if ctx:
+            await ctx.report_progress(0, 100)
         
         # Run the command with realtime output processing
         process = subprocess.Popen(
@@ -117,14 +119,16 @@ def run_cursor_tools(
         # Specific handling for missing cursor-tools executable
         if 'cursor-tools' in str(e):
             error_msg = "Error: cursor-tools executable not found. Set CURSOR_TOOLS_PATH environment variable to the absolute path of the cursor-tools executable."
-            ctx.error(error_msg)
+            if ctx:
+                await ctx.error(error_msg)
             return error_msg
         else:
             # Re-raise other FileNotFoundError
             raise
     except Exception as e:
         error_msg = f"Error executing command: {str(e)}"
-        ctx.error(error_msg)
+        if ctx:
+            await ctx.error(error_msg)
         return error_msg
     
     stdout_lines = []
@@ -148,7 +152,8 @@ def run_cursor_tools(
             # Send heartbeat progress updates every 3 seconds
             if current_time - last_progress_time >= 3:
                 progress_pct = min(int(elapsed / 3), 95)  # Cap at 95% until complete
-                ctx.report_progress(progress_pct, 100)
+                if ctx:
+                    await ctx.report_progress(progress_pct, 100)
                 print(f"DEBUG: Progress heartbeat {progress_pct}%", file=sys.stderr)
                 last_progress_time = current_time
             
@@ -159,12 +164,14 @@ def run_cursor_tools(
                 if remaining_stdout:
                     for line in remaining_stdout.splitlines():
                         stdout_lines.append(line)
-                        ctx.info(f"OUT: {line}")
+                        if ctx:
+                            await ctx.info(f"OUT: {line}")
                         line_count += 1
                 if remaining_stderr:
                     for line in remaining_stderr.splitlines():
                         stderr_lines.append(line)
-                        ctx.info(f"ERR: {line}")
+                        if ctx:
+                            await ctx.info(f"ERR: {line}")
                         print(f"DEBUG: STDERR: {line}", file=sys.stderr)
                         line_count += 1
                 break
@@ -181,24 +188,28 @@ def run_cursor_tools(
             if stdout_line:
                 line = stdout_line.rstrip()
                 stdout_lines.append(line)
-                ctx.info(f"OUT: {line}")
+                if ctx:
+                    await ctx.info(f"OUT: {line}")
                 line_count += 1
                 
                 # Update progress on each line
                 elapsed = time.time() - start_time
                 progress_pct = min(int(elapsed / 3), 95)
-                ctx.report_progress(progress_pct, 100)
+                if ctx:
+                    await ctx.report_progress(progress_pct, 100)
                 last_progress_time = time.time()
                 
             if stderr_line:
                 line = stderr_line.rstrip()
                 stderr_lines.append(line)
-                ctx.info(f"ERR: {line}")
+                if ctx:
+                    await ctx.info(f"ERR: {line}")
                 print(f"DEBUG: STDERR: {line}", file=sys.stderr)
                 line_count += 1
     except Exception as e:
         print(f"DEBUG: Exception in subprocess handling: {str(e)}", file=sys.stderr)
-        ctx.error(f"Exception during command execution: {str(e)}")
+        if ctx:
+            await ctx.error(f"Exception during command execution: {str(e)}")
         # Try to terminate the process if still running
         if process.poll() is None:
             process.terminate()
@@ -217,7 +228,8 @@ def run_cursor_tools(
     execution_time = time.time() - start_time
 
     # Report completion
-    ctx.report_progress(100, 100)
+    if ctx:
+        await ctx.report_progress(100, 100)
     
     # Debug info
     print(f"DEBUG: Command finished with code {returncode}", file=sys.stderr)
@@ -234,7 +246,7 @@ def run_cursor_tools(
         return f"Command failed with code {returncode}:\nStdout:\n{stdout}\nStderr:\n{stderr}"
 
 @mcp.tool()
-def set_working_directory(directory_path: str) -> str:
+async def set_working_directory(directory_path: str) -> str:
     """Set the working directory for cursor-tools commands.
     
     IMPORTANT: This function must be called at least once before using any other tools.
@@ -254,17 +266,21 @@ def set_working_directory(directory_path: str) -> str:
         return f"Error: {directory_path} is not a valid directory"
 
 @mcp.tool()
-def test(message: str, ctx: Context = None) -> str:
+async def test(message: str, ctx: Context = None) -> str:
     """Simple echo test function."""
     if ctx:
-        ctx.info(f"Echo test: {message}")
+        await ctx.info(f"Echo test: {message}")
     return f"Echo: {message}"
 
 @mcp.tool()
-def ask(
+async def ask(
     query: str,
-    ctx: Context = None,
-    **kwargs
+    max_tokens: Optional[int] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
+    save_to: Optional[str] = None,
+    ctx: Context = None
 ) -> str:
     """Ask a direct question to an LLM without context.
     
@@ -280,24 +296,29 @@ def ask(
     """
     command = [cursor_tools_exec, "ask", query]
     
-    # Extract known parameters from kwargs
-    params = {}
-    valid_params = ["max_tokens", "provider", "model", "reasoning_effort", "save_to"]
-    
-    for param in valid_params:
-        if param in kwargs and kwargs[param] is not None:
-            params[param] = kwargs[param]
+    params = {
+        "max_tokens": max_tokens,
+        "provider": provider,
+        "model": model,
+        "reasoning_effort": reasoning_effort,
+        "save_to": save_to
+    }
     
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def plan(
+async def plan(
     query: str,
-    ctx: Context = None,
-    **kwargs
+    max_tokens: Optional[int] = None,
+    file_provider: Optional[str] = None,
+    thinking_provider: Optional[str] = None,
+    file_model: Optional[str] = None,
+    thinking_model: Optional[str] = None,
+    save_to: Optional[str] = None,
+    ctx: Context = None
 ) -> str:
     """Generate a focused implementation plan using AI.
     
@@ -314,25 +335,29 @@ def plan(
     """
     command = [cursor_tools_exec, "plan", query]
     
-    # Extract known parameters from kwargs
-    params = {}
-    valid_params = ["max_tokens", "file_provider", "thinking_provider", 
-                   "file_model", "thinking_model", "save_to"]
-    
-    for param in valid_params:
-        if param in kwargs and kwargs[param] is not None:
-            params[param] = kwargs[param]
+    params = {
+        "max_tokens": max_tokens,
+        "file_provider": file_provider,
+        "thinking_provider": thinking_provider,
+        "file_model": file_model,
+        "thinking_model": thinking_model,
+        "save_to": save_to
+    }
     
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def web(
+async def web(
     query: str,
-    ctx: Context = None,
-    **kwargs
+    max_tokens: Optional[int] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    max_search_results: Optional[int] = None,
+    save_to: Optional[str] = None,
+    ctx: Context = None
 ) -> str:
     """Get answers from the web using an AI model with search capabilities.
     
@@ -348,24 +373,30 @@ def web(
     """
     command = [cursor_tools_exec, "web", query]
     
-    # Extract known parameters from kwargs
-    params = {}
-    valid_params = ["max_tokens", "provider", "model", "max_search_results", "save_to"]
-    
-    for param in valid_params:
-        if param in kwargs and kwargs[param] is not None:
-            params[param] = kwargs[param]
+    params = {
+        "max_tokens": max_tokens,
+        "provider": provider,
+        "model": model,
+        "max_search_results": max_search_results,
+        "save_to": save_to
+    }
     
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def repo(
+async def repo(
     query: str,
-    ctx: Context = None,
-    **kwargs
+    max_tokens: Optional[int] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    from_github: Optional[bool] = None,
+    repo_url: Optional[str] = None,
+    subdir: Optional[str] = None,
+    save_to: Optional[str] = None,
+    ctx: Context = None
 ) -> str:
     """Get context-aware answers about a repository using AI.
     
@@ -384,29 +415,36 @@ def repo(
     """
     command = [cursor_tools_exec, "repo", query]
     
-    # Extract known parameters from kwargs
-    params = {}
-    valid_params = ["max_tokens", "provider", "model", "repo_url", 
-                   "subdir", "save_to", "from_github"]
-    
-    for param in valid_params:
-        if param in kwargs and kwargs[param] is not None:
-            params[param] = kwargs[param]
+    params = {
+        "max_tokens": max_tokens,
+        "provider": provider,
+        "model": model,
+        "repo_url": repo_url,
+        "subdir": subdir,
+        "save_to": save_to,
+        "from_github": from_github
+    }
     
     path_params = ["save_to", "subdir"]
     boolean_params = ["from_github"]
     
     # Check if from_github is in params
-    from_github = params.get("from_github", False)
+    from_github_val = from_github if from_github is not None else False
     
     command_args = build_command_args(command, params, path_params, boolean_params)
-    return run_cursor_tools(command_args, ctx, from_github)
+    return await run_cursor_tools(command_args, ctx, from_github_val)
 
 @mcp.tool()
-def doc(
+async def doc(
     query: Optional[str] = None,
-    ctx: Context = None,
-    **kwargs
+    max_tokens: Optional[int] = None,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    from_github: Optional[bool] = None,
+    repo_url: Optional[str] = None,
+    output: Optional[str] = None,
+    save_to: Optional[str] = None,
+    ctx: Context = None
 ) -> str:
     """Generate comprehensive documentation for a repository.
     
@@ -426,32 +464,30 @@ def doc(
     if query:
         command.append(query)
     
-    # Extract known parameters from kwargs
-    params = {}
-    valid_params = ["max_tokens", "provider", "model", "repo_url", 
-                   "from_github", "output", "save_to"]
-    
-    for param in valid_params:
-        if param in kwargs and kwargs[param] is not None:
-            params[param] = kwargs[param]
+    params = {
+        "max_tokens": max_tokens,
+        "provider": provider,
+        "model": model,
+        "repo_url": repo_url,
+        "from_github": from_github,
+        "output": output
+    }
     
     # Handle output or save_to parameter
-    if "output" in params and params["output"] is not None:
-        pass  # Use the output parameter as is
-    elif "save_to" in params and params["save_to"] is not None:
-        params["output"] = params.pop("save_to")  # Use save_to as output
+    if output is None and save_to is not None:
+        params["output"] = save_to
     
     path_params = ["output"]
     boolean_params = ["from_github"]
     
     # Check if from_github is in params
-    from_github = params.get("from_github", False)
+    from_github_val = from_github if from_github is not None else False
     
     command_args = build_command_args(command, params, path_params, boolean_params)
-    return run_cursor_tools(command_args, ctx, from_github)
+    return await run_cursor_tools(command_args, ctx, from_github_val)
 
 @mcp.tool()
-def youtube(
+async def youtube(
     url: str,
     query: Optional[str] = None,
     type: Optional[Literal["summary", "transcript", "plan", "review", "custom"]] = None,
@@ -473,10 +509,10 @@ def youtube(
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def github_pr(
+async def github_pr(
     number: Optional[int] = None,
     from_github: Optional[str] = None,
     save_to: Optional[str] = None,
@@ -497,10 +533,10 @@ def github_pr(
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def github_issue(
+async def github_issue(
     number: Optional[int] = None,
     from_github: Optional[str] = None,
     save_to: Optional[str] = None,
@@ -521,10 +557,10 @@ def github_issue(
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def clickup_task(
+async def clickup_task(
     task_id: str,
     save_to: Optional[str] = None,
     ctx: Context = None
@@ -540,10 +576,10 @@ def clickup_task(
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def mcp_search(
+async def mcp_search(
     query: str,
     provider: Optional[Literal["anthropic", "openrouter"]] = None,
     save_to: Optional[str] = None,
@@ -561,10 +597,10 @@ def mcp_search(
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def mcp_run(
+async def mcp_run(
     query: str,
     provider: Optional[Literal["anthropic", "openrouter"]] = None,
     save_to: Optional[str] = None,
@@ -582,10 +618,10 @@ def mcp_run(
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def browser_open(
+async def browser_open(
     url: str,
     console: Optional[bool] = None,
     html: Optional[bool] = None,
@@ -625,10 +661,10 @@ def browser_open(
     no_prefix_params = ["console", "network", "headless"]
     
     command_args = build_command_args(command, params, path_params, boolean_params, no_prefix_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def browser_act(
+async def browser_act(
     instruction: str,
     url: Optional[str] = None,
     console: Optional[bool] = None,
@@ -670,10 +706,10 @@ def browser_act(
     no_prefix_params = ["console", "network", "headless"]
     
     command_args = build_command_args(command, params, path_params, boolean_params, no_prefix_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def browser_observe(
+async def browser_observe(
     instruction: str,
     url: Optional[str] = None,
     console: Optional[bool] = None,
@@ -715,10 +751,10 @@ def browser_observe(
     no_prefix_params = ["console", "network", "headless"]
     
     command_args = build_command_args(command, params, path_params, boolean_params, no_prefix_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def browser_extract(
+async def browser_extract(
     instruction: str,
     url: Optional[str] = None,
     console: Optional[bool] = None,
@@ -760,10 +796,10 @@ def browser_extract(
     no_prefix_params = ["console", "network", "headless"]
     
     command_args = build_command_args(command, params, path_params, boolean_params, no_prefix_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def xcode_build(
+async def xcode_build(
     build_path: Optional[str] = None,
     destination: Optional[str] = None,
     save_to: Optional[str] = None,
@@ -782,10 +818,10 @@ def xcode_build(
     path_params = ["build_path", "save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def xcode_run(
+async def xcode_run(
     destination: Optional[str] = None,
     save_to: Optional[str] = None,
     ctx: Context = None
@@ -802,10 +838,10 @@ def xcode_run(
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 @mcp.tool()
-def xcode_lint(
+async def xcode_lint(
     save_to: Optional[str] = None,
     ctx: Context = None
 ) -> str:
@@ -817,7 +853,7 @@ def xcode_lint(
     path_params = ["save_to"]
     
     command_args = build_command_args(command, params, path_params)
-    return run_cursor_tools(command_args, ctx)
+    return await run_cursor_tools(command_args, ctx)
 
 def main():
     """Entry point for the package."""

@@ -3,15 +3,15 @@ requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cursor-tools-mcp"
-version = "2.1.1"
-description = "MCP server for cursor-tools"
+name = "vibe-tools"
+version = "2.2.0"
+description = "MCP server for cursor-tools/cursor-tools"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
-    "fastmcp>=0.1.0",
+    "fastmcp>=0.4.1",
 ]
 
 [project.scripts]
-cursor-tools-mcp = "server:main"
+vibe-tools = "server:main"
