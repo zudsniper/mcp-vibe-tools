@@ -34,13 +34,14 @@ print(f"DEBUG: Using cursor-tools executable: {cursor_tools_exec}", file=sys.std
 
 # Initialize FastMCP
 mcp = FastMCP(
-    "cursor-tools-mcp", 
+    "vibe-tools-mcp", 
     version=VERSION,
-    description="MCP server for cursor-tools CLI. IMPORTANT: Always set working directory with set_working_directory before using any tools."
+    description="MCP server for cursor-tools CLI. Set working directory using the CWD environment variable at startup or the set_working_directory tool at runtime."
 )
 
 # Global working directory
-current_working_directory = "/Users/jason/mcp/mcp-vibe-tools"
+current_working_directory = os.environ.get('CWD', "/Users/jason/mcp/mcp-vibe-tools")
+print(f"DEBUG: Using working directory: {current_working_directory}", file=sys.stderr)
 
 def build_command_args(
     command: List[str],

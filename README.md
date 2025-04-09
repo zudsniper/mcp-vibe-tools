@@ -101,7 +101,8 @@ Add this block to your MCP client's configuration to connect:
         "mcp-vibe-tools"
       ],
       "env": {
-        "VIBE_TOOLS_PATH": "/absolute/path/to/vibe-tools"
+        "VIBE_TOOLS_PATH": "/absolute/path/to/vibe-tools",
+        "CWD": "/path/to/your/project"
       }
     }
   }
@@ -122,7 +123,8 @@ uv run mcp-vibe-tools
 
 - **`VIBE_TOOLS_PATH`** (preferred): Absolute path or command name for the `vibe-tools` CLI executable.
 - **`CURSOR_TOOLS_PATH`** (legacy, still supported): Same as above.
-- If **both** are set, `VIBE_TOOLS_PATH` takes precedence.
+- **`CWD`**: Initial working directory for all commands. Setting this eliminates the need to call `set_working_directory` first.
+- If **both** `VIBE_TOOLS_PATH` and `CURSOR_TOOLS_PATH` are set, `VIBE_TOOLS_PATH` takes precedence.
 - If neither is set, defaults to `'cursor-tools'` (or `'vibe-tools'` if aliased).
 
 ---
