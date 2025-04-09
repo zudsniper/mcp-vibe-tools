@@ -1,4 +1,4 @@
-from fastmcp import FastMCP, Context
+from mcp.server.fastmcp import FastMCP, Context
 import subprocess
 import os
 import pathlib
@@ -20,8 +20,16 @@ except Exception as e:
     print(f"DEBUG: Error reading version from pyproject.toml: {e}", file=sys.stderr)
 
 # Get cursor-tools path from environment or use default
-cursor_tools_exec = os.environ.get('CURSOR_TOOLS_PATH', 'cursor-tools')
-print(f"DEBUG: CURSOR_TOOLS_PATH from env: {os.environ.get('CURSOR_TOOLS_PATH')}", file=sys.stderr)
+vibe_tools_path = os.environ.get('VIBE_TOOLS_PATH')
+cursor_tools_path = os.environ.get('CURSOR_TOOLS_PATH')
+if vibe_tools_path:
+    cursor_tools_exec = vibe_tools_path
+elif cursor_tools_path:
+    cursor_tools_exec = cursor_tools_path
+else:
+    cursor_tools_exec = 'cursor-tools'
+print(f"DEBUG: VIBE_TOOLS_PATH from env: {vibe_tools_path}", file=sys.stderr)
+print(f"DEBUG: CURSOR_TOOLS_PATH from env: {cursor_tools_path}", file=sys.stderr)
 print(f"DEBUG: Using cursor-tools executable: {cursor_tools_exec}", file=sys.stderr)
 
 # Initialize FastMCP
@@ -118,7 +126,7 @@ async def run_cursor_tools(
     except FileNotFoundError as e:
         # Specific handling for missing cursor-tools executable
         if 'cursor-tools' in str(e):
-            error_msg = "Error: cursor-tools executable not found. Set CURSOR_TOOLS_PATH environment variable to the absolute path of the cursor-tools executable."
+            error_msg = "Error: cursor-tools executable not found. Set VIBE_TOOLS_PATH (preferred) or CURSOR_TOOLS_PATH environment variable to the absolute path of the vibe-tools executable."
             if ctx:
                 await ctx.error(error_msg)
             return error_msg
@@ -282,17 +290,17 @@ async def ask(
     save_to: Optional[str] = None,
     ctx: Context = None
 ) -> str:
-    """Ask a direct question to an LLM without context.
+    """Ask a direct question to an AI model.
     
-    Note: Generally less useful than repo or plan as it doesn't include codebase context.
+    Use for simple queries without repository context. Prefer `repo` or `plan` for code-aware answers.
     
     Parameters:
-        query: Question to ask the LLM
-        max_tokens: Optional[int] - Maximum tokens for response
-        provider: Optional[str] - AI provider (openai, anthropic, etc.)
-        model: Optional[str] - Model name to use
-        reasoning_effort: Optional[str] - Control reasoning depth (low/medium/high)
-        save_to: Optional[str] - Path to save response
+    query: The question to ask (string)
+    provider: AI provider to use, e.g., openai, anthropic, perplexity, gemini, modelbox, or openrouter (optional)
+    model: Model to use, e.g., gpt-4, claude-3, gemini-pro (optional)
+    reasoning_effort: Control reasoning depth: low, medium, or high (optional)
+    max_tokens: Maximum tokens for response (integer, optional)
+    save_to: Path to save response (string, optional)
     """
     command = [cursor_tools_exec, "ask", query]
     
@@ -320,18 +328,18 @@ async def plan(
     save_to: Optional[str] = None,
     ctx: Context = None
 ) -> str:
-    """Generate a focused implementation plan using AI.
+    """Generate a detailed implementation plan for a coding task.
     
-    Uses multiple AI models to identify relevant files and generate a detailed plan.
+    Uses multiple AI models to identify relevant files and outline steps.
     
     Parameters:
-        query: The implementation task to plan
-        max_tokens: Optional[int] - Maximum tokens for response
-        file_provider: Optional[str] - Provider for file identification
-        thinking_provider: Optional[str] - Provider for plan generation
-        file_model: Optional[str] - Model for file identification
-        thinking_model: Optional[str] - Model for plan generation
-        save_to: Optional[str] - Path to save response
+    query: The implementation task to plan (string)
+    file_provider: Provider for file identification, e.g., gemini, openai, anthropic, perplexity, modelbox, or openrouter (optional)
+    thinking_provider: Provider for plan generation, e.g., gemini, openai, anthropic, perplexity, modelbox, or openrouter (optional)
+    file_model: Model for file identification, e.g., gpt-4, claude-3, gemini-pro (optional)
+    thinking_model: Model for plan generation, e.g., gpt-4, claude-3, gemini-pro (optional)
+    max_tokens: Maximum tokens for response (integer, optional)
+    save_to: Path to save response (string, optional)
     """
     command = [cursor_tools_exec, "plan", query]
     
@@ -359,17 +367,17 @@ async def web(
     save_to: Optional[str] = None,
     ctx: Context = None
 ) -> str:
-    """Get answers from the web using an AI model with search capabilities.
+    """Get answers from the web using an AI agent with internet access.
     
-    Web is a smart autonomous agent with internet access - not just a search engine.
+    Ideal for research, troubleshooting, or gathering up-to-date information.
     
     Parameters:
-        query: Question to search the web for
-        max_tokens: Optional[int] - Maximum tokens for response
-        provider: Optional[str] - AI provider with web search capabilities
-        model: Optional[str] - Model name to use
-        max_search_results: Optional[int] - Maximum search results to consider
-        save_to: Optional[str] - Path to save response
+    query: The question or topic to search (string)
+    provider: AI provider with web search capabilities, e.g., perplexity, gemini, modelbox, or openrouter (optional)
+    model: Model to use, e.g., gpt-4, claude-3, gemini-pro (optional)
+    max_tokens: Maximum tokens for response (integer, optional)
+    max_search_results: Maximum search results to consider (integer, optional)
+    save_to: Path to save response (string, optional)
     """
     command = [cursor_tools_exec, "web", query]
     
@@ -398,20 +406,19 @@ async def repo(
     save_to: Optional[str] = None,
     ctx: Context = None
 ) -> str:
-    """Get context-aware answers about a repository using AI.
+    """Ask questions about the current repository or a remote GitHub repo.
     
-    Provides intelligent insights based on repository content. Can analyze specific 
-    subdirectories or remote GitHub repositories.
+    Provides insights based on code, structure, and documentation.
     
     Parameters:
-        query: Question about the repository
-        max_tokens: Optional[int] - Maximum tokens for response
-        provider: Optional[str] - AI provider to use
-        model: Optional[str] - Model name to use
-        from_github: Optional[bool] - Analyze remote GitHub repository
-        repo_url: Optional[str] - URL of GitHub repository
-        subdir: Optional[str] - Analyze specific subdirectory
-        save_to: Optional[str] - Path to save response
+    query: The question about the repository (string)
+    provider: AI provider to use, e.g., gemini, openai, anthropic, perplexity, modelbox, or openrouter (optional)
+    model: Model to use, e.g., gpt-4, claude-3, gemini-pro (optional)
+    max_tokens: Maximum tokens for response (integer, optional)
+    from_github: Analyze remote GitHub repository (bool, optional)
+    repo_url: URL of GitHub repository (string, optional)
+    subdir: Analyze specific subdirectory (string, optional)
+    save_to: Path to save response (string, optional)
     """
     command = [cursor_tools_exec, "repo", query]
     
@@ -446,19 +453,18 @@ async def doc(
     save_to: Optional[str] = None,
     ctx: Context = None
 ) -> str:
-    """Generate comprehensive documentation for a repository.
+    """Generate comprehensive documentation for a local or remote repository.
     
-    Can document local or remote GitHub repositories.
+    Can focus on specific topics or files if desired.
     
     Parameters:
-        query: Optional query to focus documentation
-        max_tokens: Optional[int] - Maximum tokens for response
-        provider: Optional[str] - AI provider to use
-        model: Optional[str] - Model name to use
-        from_github: Optional[bool] - Document remote GitHub repository
-        repo_url: Optional[str] - URL of GitHub repository
-        output: Optional[str] - Output file path
-        save_to: Optional[str] - Alternative to output parameter
+    query: Optional query to focus documentation (string, optional)
+    provider: AI provider to use, e.g., gemini, openai, anthropic, perplexity, modelbox, or openrouter (optional)
+    model: Model to use, e.g., gpt-4, claude-3, gemini-pro (optional)
+    max_tokens: Maximum tokens for response (integer, optional)
+    from_github: Document remote GitHub repository (bool, optional)
+    repo_url: URL of GitHub repository (string, optional)
+    output: Output file path (string, optional)
     """
     command = [cursor_tools_exec, "doc"]
     if query:

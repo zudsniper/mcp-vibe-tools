@@ -1,6 +1,6 @@
-# MCP Vibe Tools: Python FastMCP Server for cursor-tools
+# MCP Vibe Tools: Python FastMCP Server for vibe-tools
 
-This project provides an **MCP (Model Context Protocol) server** built with **FastMCP (Python)** that wraps the `cursor-tools` CLI, allowing AI agents or other services (like Claude Desktop) to interact with `cursor-tools` commands via HTTP requests.
+This project provides an **MCP (Model Context Protocol) server** built with **FastMCP (Python)** that wraps the `vibe-tools` CLI (formerly `cursor-tools`), allowing AI agents or other services (like Claude Desktop) to interact with `vibe-tools` commands via HTTP requests.
 
 ---
 
@@ -11,8 +11,10 @@ This project provides an **MCP (Model Context Protocol) server** built with **Fa
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
 - [Running the Server](#running-the-server)
+- [Environment Variables](#environment-variables)
 - [Available MCP Tools (Endpoints)](#available-mcp-tools-endpoints)
 - [Example Usage](#example-usage)
+- [Context Injection and Async Tools](#context-injection-and-async-tools)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
@@ -21,7 +23,7 @@ This project provides an **MCP (Model Context Protocol) server** built with **Fa
 
 ## Overview
 
-This server exposes endpoints corresponding to various `cursor-tools` commands (like `repo`, `plan`, `web`, `browser`, `xcode`, etc.). It translates JSON request bodies into CLI arguments, executes the `cursor-tools` command in the correct working directory, and returns the output.
+This server exposes endpoints corresponding to various `vibe-tools` commands (like `repo`, `plan`, `web`, `browser`, `xcode`, etc.). It translates JSON request bodies into CLI arguments, executes the command in the correct working directory, and returns the output.
 
 It is implemented in **Python** using **FastMCP** (https://github.com/jlowin/fastmcp), providing an SSE-capable MCP server.
 
@@ -31,7 +33,7 @@ A key feature is the ability to dynamically set the working directory for contex
 
 ## Features
 
-- Wraps most major `cursor-tools` commands.
+- Wraps most major `vibe-tools` commands.
 - Manages execution context (working directory) dynamically.
 - Allows changing the target project directory via an MCP tool.
 - Handles parameter mapping from JSON to CLI flags.
@@ -44,11 +46,11 @@ A key feature is the ability to dynamically set the working directory for contex
 
 1. **Python 3.8+**
 
-2. **cursor-tools CLI**
+2. **vibe-tools CLI**
 
    - Must be installed globally (`npm install -g vibe-tools` or `pnpm install -g vibe-tools`)
    - Properly configured with API keys, `.repomixignore`, etc.
-   - See [cursor-tools repo](https://github.com/getcursor/cursor-tools)
+   - See [vibe-tools repo](https://github.com/getcursor/cursor-tools)
 
 3. **Install Python dependencies**
 
@@ -73,7 +75,7 @@ cd mcp-vibe-tools
 pip install -r requirements.txt
 ```
 
-3. **Ensure `cursor-tools` CLI is installed globally**
+3. **Ensure `vibe-tools` CLI is installed globally**
 
 ---
 
@@ -96,47 +98,76 @@ The server will log its startup status, workspace root, and initial working dire
 
 ---
 
+## Environment Variables
+
+- **`VIBE_TOOLS_PATH`** (preferred): Absolute path or command name for the `vibe-tools` CLI executable.
+- **`CURSOR_TOOLS_PATH`** (legacy, still supported): Same as above.
+- If **both** are set, `VIBE_TOOLS_PATH` takes precedence.
+- If neither is set, defaults to `'cursor-tools'` (or `'vibe-tools'` if aliased).
+
+---
+
 ## Available MCP Tools (Endpoints)
 
 The server exposes tools under `/mcp/tools/`:
 
 ### Meta Tools
 
-- `POST /mcp/tools/set_working_directory`
-  - Sets the working directory for subsequent `cursor-tools` commands.
-  - **Request:**
-    ```json
-    {
-      "directoryPath": "/path/to/your/project"
-    }
-    ```
-  - **Response:**
-    ```json
-    {
-      "success": true,
-      "message": "Working directory set to: /path/to/your/project"
-    }
-    ```
+- **`POST /mcp/tools/set_working_directory`**  
+  Set the working directory for subsequent commands.
 
-### cursor-tools Command Wrappers
+### vibe-tools Command Wrappers
 
-- `POST /mcp/tools/ask`
-- `POST /mcp/tools/plan`
-- `POST /mcp/tools/web`
-- `POST /mcp/tools/repo`
-- `POST /mcp/tools/doc`
-- `POST /mcp/tools/youtube`
-- `POST /mcp/tools/github/pr`
-- `POST /mcp/tools/github/issue`
-- `POST /mcp/tools/clickup/task`
-- `POST /mcp/tools/mcp/search`
-- `POST /mcp/tools/mcp/run`
-- `POST /mcp/tools/browser/act`
-- `POST /mcp/tools/browser/observe`
-- `POST /mcp/tools/browser/extract`
-- `POST /mcp/tools/xcode/build`
-- `POST /mcp/tools/xcode/run`
-- `POST /mcp/tools/xcode/lint`
+- **`POST /mcp/tools/ask`**  
+  Ask a question to an AI model via `vibe-tools ask`.
+
+- **`POST /mcp/tools/plan`**  
+  Generate an implementation plan using AI.
+
+- **`POST /mcp/tools/web`**  
+  Perform a web search or autonomous web agent query.
+
+- **`POST /mcp/tools/repo`**  
+  Ask questions about the current repository context.
+
+- **`POST /mcp/tools/doc`**  
+  Generate documentation for the repository.
+
+- **`POST /mcp/tools/youtube`**  
+  Analyze YouTube videos (summarize, transcript, plan, etc.).
+
+- **`POST /mcp/tools/github/pr`**  
+  Get information about GitHub pull requests.
+
+- **`POST /mcp/tools/github/issue`**  
+  Get information about GitHub issues.
+
+- **`POST /mcp/tools/clickup/task`**  
+  Get information about ClickUp tasks.
+
+- **`POST /mcp/tools/mcp/search`**  
+  Search the MCP marketplace for servers.
+
+- **`POST /mcp/tools/mcp/run`**  
+  Run a tool on a connected MCP server.
+
+- **`POST /mcp/tools/browser/act`**  
+  Automate browser actions (click, type, etc.).
+
+- **`POST /mcp/tools/browser/observe`**  
+  Observe interactive elements on a webpage.
+
+- **`POST /mcp/tools/browser/extract`**  
+  Extract data from a webpage.
+
+- **`POST /mcp/tools/xcode/build`**  
+  Build an Xcode project.
+
+- **`POST /mcp/tools/xcode/run`**  
+  Build and run an Xcode project.
+
+- **`POST /mcp/tools/xcode/lint`**  
+  Run static analysis on an Xcode project.
 
 **Note:** Paths like `save_to`, `screenshot`, `video`, etc., are relative to the current working directory set via `set_working_directory`.
 
