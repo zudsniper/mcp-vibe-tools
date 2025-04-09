@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
-    "mcp[cli]",
+    "mcp[cli]>=1.6.0"
 ]
 
 [project.scripts]
