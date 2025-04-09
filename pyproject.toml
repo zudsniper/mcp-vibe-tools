@@ -15,3 +15,12 @@ dependencies = [
 
 [project.scripts]
 mcp-vibe-tools = "server:main"
+[project.optional-dependencies]
+dev = [
+    "tox",
+    "tox-gh-actions",
+    "build",
+    "wheel",
+    "twine",
+    "requests"
+]
