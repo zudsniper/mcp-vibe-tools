@@ -400,8 +400,7 @@ async def repo(
     max_tokens: Optional[int] = None,
     provider: Optional[str] = None,
     model: Optional[str] = None,
-    from_github: Optional[bool] = None,
-    repo_url: Optional[str] = None,
+    from_github: Optional[str] = None,
     subdir: Optional[str] = None,
     save_to: Optional[str] = None,
     ctx: Context = None
@@ -415,8 +414,7 @@ async def repo(
     provider: AI provider to use, e.g., gemini, openai, anthropic, perplexity, modelbox, or openrouter (optional)
     model: Model to use, e.g., gpt-4, claude-3, gemini-pro (optional)
     max_tokens: Maximum tokens for response (integer, optional)
-    from_github: Analyze remote GitHub repository (bool, optional)
-    repo_url: URL of GitHub repository (string, optional)
+    from_github: GitHub repository in format username/repo-name[@branch] (string, optional)
     subdir: Analyze specific subdirectory (string, optional)
     save_to: Path to save response (string, optional)
     """
@@ -426,20 +424,18 @@ async def repo(
         "max_tokens": max_tokens,
         "provider": provider,
         "model": model,
-        "repo_url": repo_url,
+        "from_github": from_github,
         "subdir": subdir,
-        "save_to": save_to,
-        "from_github": from_github
+        "save_to": save_to
     }
     
     path_params = ["save_to", "subdir"]
-    boolean_params = ["from_github"]
     
-    # Check if from_github is in params
-    from_github_val = from_github if from_github is not None else False
+    # Determine if we're using a remote GitHub repo
+    using_github = from_github is not None
     
-    command_args = build_command_args(command, params, path_params, boolean_params)
-    return await run_cursor_tools(command_args, ctx, from_github_val)
+    command_args = build_command_args(command, params, path_params)
+    return await run_cursor_tools(command_args, ctx, using_github)
 
 @mcp.tool()
 async def doc(
@@ -447,8 +443,7 @@ async def doc(
     max_tokens: Optional[int] = None,
     provider: Optional[str] = None,
     model: Optional[str] = None,
-    from_github: Optional[bool] = None,
-    repo_url: Optional[str] = None,
+    from_github: Optional[str] = None,
     output: Optional[str] = None,
     save_to: Optional[str] = None,
     ctx: Context = None
@@ -462,8 +457,7 @@ async def doc(
     provider: AI provider to use, e.g., gemini, openai, anthropic, perplexity, modelbox, or openrouter (optional)
     model: Model to use, e.g., gpt-4, claude-3, gemini-pro (optional)
     max_tokens: Maximum tokens for response (integer, optional)
-    from_github: Document remote GitHub repository (bool, optional)
-    repo_url: URL of GitHub repository (string, optional)
+    from_github: GitHub repository in format username/repo-name[@branch] (string, optional)
     output: Output file path (string, optional)
     """
     command = [cursor_tools_exec, "doc"]
@@ -474,7 +468,6 @@ async def doc(
         "max_tokens": max_tokens,
         "provider": provider,
         "model": model,
-        "repo_url": repo_url,
         "from_github": from_github,
         "output": output
     }
@@ -484,13 +477,12 @@ async def doc(
         params["output"] = save_to
     
     path_params = ["output"]
-    boolean_params = ["from_github"]
     
-    # Check if from_github is in params
-    from_github_val = from_github if from_github is not None else False
+    # Determine if we're using a remote GitHub repo
+    using_github = from_github is not None
     
-    command_args = build_command_args(command, params, path_params, boolean_params)
-    return await run_cursor_tools(command_args, ctx, from_github_val)
+    command_args = build_command_args(command, params, path_params)
+    return await run_cursor_tools(command_args, ctx, using_github)
 
 @mcp.tool()
 async def youtube(
