@@ -93,7 +93,7 @@ jobs:
         mkdir -p dist/release
         VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
         PACKAGE_NAME=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['name'])")
-        COMPATIBLE_VERSIONS=$(python -c "import tomllib, json; print(json.dumps(tomllib.load(open('pyproject.toml', 'rb'))['tool']['sorterpy']['compatible_api_versions']))")
+        COMPATIBLE_VERSIONS=$(python -c "import tomllib, json; d=tomllib.load(open('pyproject.toml', 'rb')); print(json.dumps(d.get('tool', {}).get('sorterpy', {}).get('compatible_api_versions', [])))")
         echo "PACKAGE_VERSION=$VERSION" >> $GITHUB_ENV
         echo "PACKAGE_NAME=$PACKAGE_NAME" >> $GITHUB_ENV
         echo "COMPATIBLE_VERSIONS=$COMPATIBLE_VERSIONS" >> $GITHUB_ENV
