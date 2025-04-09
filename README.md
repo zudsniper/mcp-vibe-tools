@@ -1,6 +1,7 @@
-# MCP Vibe Tools: Python FastMCP Server for vibe-tools
+# mcp-vibe-tools
+> _mcp server wrapper for `cursor-tools` (now `vibe-tools`)._  
 
-This project provides an **MCP (Model Context Protocol) server** built with **FastMCP (Python)** that wraps the `vibe-tools` CLI (formerly `cursor-tools`), allowing AI agents or other services (like Claude Desktop) to interact with `vibe-tools` commands via HTTP requests.
+This project provides an **MCP (Model Context Protocol) server** built with **MCP Python SDK** that wraps the `vibe-tools` CLI (formerly `cursor-tools`), allowing AI agents or other services (like Claude Desktop) to interact with `vibe-tools` without using the command line directly..
 
 ---
 
@@ -12,9 +13,7 @@ This project provides an **MCP (Model Context Protocol) server** built with **Fa
 - [Installation](#installation)
 - [Running the Server](#running-the-server)
 - [Environment Variables](#environment-variables)
-- [Available MCP Tools (Endpoints)](#available-mcp-tools-endpoints)
-- [Example Usage](#example-usage)
-- [Context Injection and Async Tools](#context-injection-and-async-tools)
+- [Available MCP Tools](#available-mcp-tools-endpoints)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
@@ -25,7 +24,7 @@ This project provides an **MCP (Model Context Protocol) server** built with **Fa
 
 This server exposes endpoints corresponding to various `vibe-tools` commands (like `repo`, `plan`, `web`, `browser`, `xcode`, etc.). It translates JSON request bodies into CLI arguments, executes the command in the correct working directory, and returns the output.
 
-It is implemented in **Python** using **FastMCP** (https://github.com/jlowin/fastmcp), providing an SSE-capable MCP server.
+It is implemented in **Python** using **Python MCP SDK** (https://github.com/modelcontextprotocol/python-sdk).
 
 A key feature is the ability to dynamically set the working directory for context-dependent commands, enabling interaction with multiple projects without restarting the server.
 
@@ -33,7 +32,7 @@ A key feature is the ability to dynamically set the working directory for contex
 
 ## Features
 
-- Wraps most major `vibe-tools` commands.
+- Wraps ALL `vibe-tools` commands.
 - Manages execution context (working directory) dynamically.
 - Allows changing the target project directory via an MCP tool.
 - Handles parameter mapping from JSON to CLI flags.
@@ -44,7 +43,7 @@ A key feature is the ability to dynamically set the working directory for contex
 
 ## Prerequisites
 
-1. **Python 3.8+**
+1. **Python 3.11+**
 
 2. **vibe-tools CLI**
 
@@ -62,20 +61,52 @@ pip install -r requirements.txt
 
 ## Installation
 
-1. **Clone this repository**
+The recommended way to install **mcp-vibe-tools** is using [uv](https://github.com/astral-sh/uv):
 
 ```bash
-git clone <your-repo-url>
-cd mcp-vibe-tools
+uv tool install mcp-vibe-tools
 ```
 
-2. **Install Python dependencies**
+This will install the CLI entry point `mcp-vibe-tools` into your uv tool environment.
+
+You can then run the server with:
 
 ```bash
-pip install -r requirements.txt
+uv run mcp-vibe-tools
 ```
 
-3. **Ensure `vibe-tools` CLI is installed globally**
+Make sure you have the `vibe-tools` CLI installed globally via npm or pnpm:
+
+```bash
+npm install -g vibe-tools
+```
+
+**Important:** Set the environment variable `VIBE_TOOLS_PATH` to the absolute path of your `vibe-tools` binary (usually something like `/usr/local/bin/vibe-tools`):
+
+```bash
+export VIBE_TOOLS_PATH=/absolute/path/to/vibe-tools
+```
+
+### Example `mcp.json` configuration
+
+Add this block to your MCP client's configuration to connect:
+
+```json
+{
+  "mcpServers": {
+    "vibe-tools": {
+      "name": "uv",
+      "args": [
+        "run",
+        "mcp-vibe-tools"
+      ],
+      "env": {
+        "VIBE_TOOLS_PATH": "/absolute/path/to/vibe-tools"
+      }
+    }
+  }
+}
+```
 
 ---
 
@@ -84,19 +115,8 @@ pip install -r requirements.txt
 Start the FastMCP server:
 
 ```bash
-python server.py
+uv run mcp-vibe-tools
 ```
-
-- By default, it runs on port **3000**.
-- To change the port:
-
-```bash
-PORT=3001 python server.py
-```
-
-The server will log its startup status, workspace root, and initial working directory.
-
----
 
 ## Environment Variables
 
@@ -107,125 +127,121 @@ The server will log its startup status, workspace root, and initial working dire
 
 ---
 
-## Available MCP Tools (Endpoints)
+## Available MCP Tools
 
-The server exposes tools under `/mcp/tools/`:
+### ask
+Ask any AI model a direct question.
+**Parameters:**
+- `query` (string): The question to ask.
+- `--provider` (string): AI provider (openai, anthropic, perplexity, gemini, modelbox, openrouter).
+- `--model` (string, required): Model to use.
+- `--reasoning-effort` (low|medium|high): Depth of reasoning.
 
-### Meta Tools
+### plan
+Generate a focused implementation plan using AI.
+**Parameters:**
+- `query` (string): The task or feature to plan.
+- `--fileProvider` (string): Provider for file identification.
+- `--thinkingProvider` (string): Provider for plan generation.
+- `--fileModel` (string): Model for file identification.
+- `--thinkingModel` (string): Model for plan generation.
 
-- **`POST /mcp/tools/set_working_directory`**  
-  Set the working directory for subsequent commands.
+### repo
+Ask questions about the current repository context.
+**Parameters:**
+- `query` (string): The question about the repo.
+- `--subdir` (string): Subdirectory to analyze.
+- `--from-github` (string): Remote GitHub repo to analyze.
+- `--provider` (string): AI provider.
+- `--model` (string): Model to use.
 
-### vibe-tools Command Wrappers
+### web
+Perform web search or autonomous web agent queries.
+**Parameters:**
+- `query` (string): The question or search task.
+- `--provider` (string): AI provider.
 
-- **`POST /mcp/tools/ask`**  
-  Ask a question to an AI model via `vibe-tools ask`.
+### doc
+Generate comprehensive documentation for the repository.
+**Parameters:**
+- `--from-github` (string): Remote GitHub repo.
+- `--provider` (string): AI provider.
+- `--model` (string): Model to use.
 
-- **`POST /mcp/tools/plan`**  
-  Generate an implementation plan using AI.
+### youtube
+Analyze YouTube videos (summarize, transcript, plan, review).
+**Parameters:**
+- `url` (string): YouTube video URL.
+- `question` (string, optional): Specific question.
+- `--type` (summary|transcript|plan|review|custom): Type of analysis.
 
-- **`POST /mcp/tools/web`**  
-  Perform a web search or autonomous web agent query.
+### github pr
+Get information about GitHub pull requests.
+**Parameters:**
+- `number` (int, optional): PR number. If omitted, fetches recent PRs.
+- `--from-github` (string): Remote GitHub repo.
 
-- **`POST /mcp/tools/repo`**  
-  Ask questions about the current repository context.
+### github issue
+Get information about GitHub issues.
+**Parameters:**
+- `number` (int, optional): Issue number. If omitted, fetches recent issues.
+- `--from-github` (string): Remote GitHub repo.
 
-- **`POST /mcp/tools/doc`**  
-  Generate documentation for the repository.
+### clickup task
+Get detailed information about a ClickUp task.
+**Parameters:**
+- `task_id` (string): ClickUp task ID.
 
-- **`POST /mcp/tools/youtube`**  
-  Analyze YouTube videos (summarize, transcript, plan, etc.).
+### mcp search
+Search the MCP marketplace for available servers.
+**Parameters:**
+- `query` (string): Search query.
 
-- **`POST /mcp/tools/github/pr`**  
-  Get information about GitHub pull requests.
+### mcp run
+Run a tool on a connected MCP server.
+**Parameters:**
+- `query` (string): Natural language command specifying the tool and arguments.
+- `--provider` (string): AI provider.
 
-- **`POST /mcp/tools/github/issue`**  
-  Get information about GitHub issues.
+### browser act
+Automate browser actions (click, type, etc.).
+**Parameters:**
+- `instruction` (string): Natural language instructions.
+- `--url` (string): URL or 'current'/'reload-current'.
+- `--video` (string): Directory to save video recording.
+- `--screenshot` (string): Path to save screenshot.
 
-- **`POST /mcp/tools/clickup/task`**  
-  Get information about ClickUp tasks.
+### browser observe
+Observe interactive elements on a webpage.
+**Parameters:**
+- `instruction` (string): What to observe.
+- `--url` (string): URL or 'current'/'reload-current'.
 
-- **`POST /mcp/tools/mcp/search`**  
-  Search the MCP marketplace for servers.
+### browser extract
+Extract data from a webpage.
+**Parameters:**
+- `instruction` (string): What to extract.
+- `--url` (string): URL or 'current'/'reload-current'.
 
-- **`POST /mcp/tools/mcp/run`**  
-  Run a tool on a connected MCP server.
+### xcode build
+Build an Xcode project.
+**Parameters:**
+- `--buildPath` (string): Custom build directory.
+- `--destination` (string): Simulator destination.
 
-- **`POST /mcp/tools/browser/act`**  
-  Automate browser actions (click, type, etc.).
+### xcode run
+Build and run an Xcode project on a simulator.
+**Parameters:**
+- `--destination` (string): Simulator destination.
 
-- **`POST /mcp/tools/browser/observe`**  
-  Observe interactive elements on a webpage.
+### xcode lint
+Run static analysis on an Xcode project.
+_No parameters._
 
-- **`POST /mcp/tools/browser/extract`**  
-  Extract data from a webpage.
-
-- **`POST /mcp/tools/xcode/build`**  
-  Build an Xcode project.
-
-- **`POST /mcp/tools/xcode/run`**  
-  Build and run an Xcode project.
-
-- **`POST /mcp/tools/xcode/lint`**  
-  Run static analysis on an Xcode project.
-
-**Note:** Paths like `save_to`, `screenshot`, `video`, etc., are relative to the current working directory set via `set_working_directory`.
-
----
-
-## Example Usage
-
-Assuming the server runs at `http://localhost:3000`:
-
-1. **Set the working directory**
-
-```bash
-curl -X POST -H "Content-Type: application/json" \
-     -d '{"directoryPath": "/path/to/my/project"}' \
-     http://localhost:3000/mcp/tools/set_working_directory
-```
-
-2. **Run a `repo` command**
-
-```bash
-curl -X POST -H "Content-Type: application/json" \
-     -d '{"query": "Explain the main function in main.py"}' \
-     http://localhost:3000/mcp/tools/repo
-```
-
-3. **Run a `plan` command**
-
-```bash
-curl -X POST -H "Content-Type: application/json" \
-     -d '{"query": "Refactor the login component"}' \
-     http://localhost:3000/mcp/tools/plan
-```
-
----
-
-## Context Injection and Async Tools
-
-- The server supports **async MCP tools**.
-- The `Context` object is **automatically injected** into tool functions **only during real MCP HTTP requests**.
-- Example tool:
-
-```python
-@mcp.tool()
-async def test(message: str, ctx: Context = None) -> str:
-    if ctx:
-        await ctx.info(f"Echo test: {message}")
-    return f"Echo: {message}"
-```
-
-- **Important:** If you invoke tools **outside** of a real MCP request (e.g., direct function call, test harness), `ctx` will be `None` or invalid.
-- To test context-dependent features, **always invoke via real HTTP requests** (e.g., curl).
-
----
-
-## Development
-
-- Tests can be added using `pytest` or similar.
-- Consider adding linting with `flake8` or `black`.
+### set_working_directory
+Change the working directory for subsequent commands.
+**Parameters:**
+- `directoryPath` (string): Absolute path to the new working directory.
 
 ---
 
